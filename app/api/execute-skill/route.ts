@@ -1,8 +1,139 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 
+// Función para verificar dirección con Google Maps Geocoding API
+async function verifyAddressWithGoogleMaps(address: string): Promise<{
+  formatted_address: string
+  lat: number
+  lng: number
+  success: boolean
+}> {
+  // #region agent log H1
+  fetch('http://127.0.0.1:7245/ingest/1fe64fd2-516e-4e4c-ad7e-e400237c7adc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:verifyAddressWithGoogleMaps:entry',message:'Function called with address',data:{address,hasEnvKey:!!process.env.GOOGLE_MAPS_API_KEY,keyPrefix:process.env.GOOGLE_MAPS_API_KEY?.substring(0,10)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
+  // #endregion
+
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY
+  if (!apiKey) {
+    // #region agent log H1-nokey
+    fetch('http://127.0.0.1:7245/ingest/1fe64fd2-516e-4e4c-ad7e-e400237c7adc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:verifyAddressWithGoogleMaps:nokey',message:'API Key NOT found in env',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
+    return { formatted_address: 'API Key de Google Maps no configurada', lat: 0, lng: 0, success: false }
+  }
+
+  try {
+    const encodedAddress = encodeURIComponent(address)
+    // Forzar búsqueda SOLO en México para evitar confusiones con nombres de calles
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodedAddress}&key=${apiKey}&language=es&region=mx&components=country:MX`
+    
+    // #region agent log H3
+    fetch('http://127.0.0.1:7245/ingest/1fe64fd2-516e-4e4c-ad7e-e400237c7adc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:verifyAddressWithGoogleMaps:beforeFetch',message:'About to call Google Maps API',data:{encodedAddress,urlWithoutKey:url.replace(apiKey,'[REDACTED]')},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
+    
+    const response = await fetch(url)
+    const data = await response.json()
+    
+    // #region agent log H2,H4
+    fetch('http://127.0.0.1:7245/ingest/1fe64fd2-516e-4e4c-ad7e-e400237c7adc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:verifyAddressWithGoogleMaps:afterFetch',message:'Google Maps API response received',data:{status:data.status,errorMessage:data.error_message,resultsCount:data.results?.length||0,httpStatus:response.status},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2,H4'})}).catch(()=>{});
+    // #endregion
+    
+    if (data.status === 'OK' && data.results.length > 0) {
+      const result = data.results[0]
+      // #region agent log H5-success
+      fetch('http://127.0.0.1:7245/ingest/1fe64fd2-516e-4e4c-ad7e-e400237c7adc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:verifyAddressWithGoogleMaps:success',message:'Address found successfully',data:{formattedAddress:result.formatted_address,lat:result.geometry.location.lat,lng:result.geometry.location.lng},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H5'})}).catch(()=>{});
+      // #endregion
+      return {
+        formatted_address: result.formatted_address,
+        lat: result.geometry.location.lat,
+        lng: result.geometry.location.lng,
+        success: true
+      }
+    }
+    
+    // #region agent log H2-notfound
+    fetch('http://127.0.0.1:7245/ingest/1fe64fd2-516e-4e4c-ad7e-e400237c7adc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:verifyAddressWithGoogleMaps:notFound',message:'Address not found or API error',data:{status:data.status,errorMessage:data.error_message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
+    return { formatted_address: 'No se encontró la dirección', lat: 0, lng: 0, success: false }
+  } catch (error) {
+    // #region agent log H4-error
+    fetch('http://127.0.0.1:7245/ingest/1fe64fd2-516e-4e4c-ad7e-e400237c7adc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:verifyAddressWithGoogleMaps:catch',message:'Exception caught',data:{error:String(error)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H4'})}).catch(()=>{});
+    // #endregion
+    console.error('Error con Google Maps API:', error)
+    return { formatted_address: 'Error al consultar Google Maps', lat: 0, lng: 0, success: false }
+  }
+}
+
+// Función para calcular similitud entre direcciones
+function calculateAddressSimilarity(addr1: string, addr2: string): { percentage: number; differences: string[] } {
+  const normalize = (s: string) => s.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remover acentos
+    .replace(/[.,#-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  
+  const n1 = normalize(addr1)
+  const n2 = normalize(addr2)
+  
+  const words1 = n1.split(' ').filter(w => w.length > 1)
+  const words2 = n2.split(' ').filter(w => w.length > 1)
+  
+  // Palabras que coinciden
+  const matches = words1.filter(w => words2.some(w2 => w2.includes(w) || w.includes(w2)))
+  const percentage = Math.round((matches.length / Math.max(words1.length, words2.length)) * 100)
+  
+  // Encontrar diferencias
+  const differences: string[] = []
+  
+  // Palabras en documento pero no en Google
+  const missingInGoogle = words1.filter(w => !words2.some(w2 => w2.includes(w) || w.includes(w2)))
+  if (missingInGoogle.length > 0) {
+    differences.push(`"${missingInGoogle.join(', ')}" no aparece en Google Maps`)
+  }
+  
+  // Palabras en Google pero no en documento
+  const missingInDoc = words2.filter(w => !words1.some(w1 => w1.includes(w) || w.includes(w1)))
+  if (missingInDoc.length > 0) {
+    differences.push(`Google Maps incluye: "${missingInDoc.join(', ')}"`)
+  }
+  
+  return { percentage, differences }
+}
+
 // Prompts para generar datos estructurados (JSON)
 const SKILL_PROMPTS: Record<string, string> = {
+  'address-verifier': `
+Eres un experto en extracción de direcciones de documentos de servicios mexicanos.
+
+Analiza el documento (recibo de CFE, agua, gas, Telmex, u otro servicio) y extrae la dirección del domicilio.
+
+RESPONDE ÚNICAMENTE con JSON válido (sin markdown, sin backticks, sin explicaciones):
+
+{
+  "tipo_documento": "Recibo de CFE/Agua/Gas/Telmex/Otro",
+  "nombre_servicio": "nombre del proveedor de servicio",
+  "numero_servicio": "número de servicio o cuenta si existe",
+  "titular": "nombre del titular si aparece",
+  "direccion_extraida": {
+    "calle": "nombre de la calle principal",
+    "numero_exterior": "número exterior",
+    "numero_interior": "número interior si existe o null",
+    "colonia": "nombre de la colonia",
+    "municipio": "municipio, delegación o alcaldía",
+    "estado": "estado o entidad federativa",
+    "codigo_postal": "código postal de 5 dígitos"
+  },
+  "direccion_completa": "dirección completa formateada para búsqueda en Google Maps"
+}
+
+REGLAS CRÍTICAS:
+1. Extrae SOLO la dirección del domicilio del cliente, NO la dirección de CFE/empresa
+2. IGNORA las calles de referencia "entre X y Y" - solo usa la calle principal
+3. En recibos de CFE, la dirección del cliente está después del nombre del titular
+4. La colonia es MUY importante - búscala cerca del código postal (ej: "COSMOPOLITA C.P.02670" significa colonia Cosmopolita)
+5. Para la direccion_completa usa ESTE formato exacto:
+   "Calle Nombre #NumExt, Colonia NombreColonia, CP XXXXX, Ciudad, Estado, México"
+6. SIEMPRE incluye ", México" al final para evitar confusiones con otros países
+7. NO incluyas calles de referencia (como "entre Madeira y Mallorca") en direccion_completa
+`,
   'pdf-to-excel': `
 Eres un experto en extracción de datos de estados de cuenta bancarios.
 
@@ -181,6 +312,58 @@ export async function POST(request: NextRequest) {
       .filter((block): block is Anthropic.TextBlock => block.type === 'text')
       .map((block) => block.text)
       .join('\n')
+
+    // Para el skill de verificación de direcciones
+    if (skillId === 'address-verifier') {
+      try {
+        let cleanJson = resultText.trim()
+        if (cleanJson.startsWith('```json')) cleanJson = cleanJson.slice(7)
+        if (cleanJson.startsWith('```')) cleanJson = cleanJson.slice(3)
+        if (cleanJson.endsWith('```')) cleanJson = cleanJson.slice(0, -3)
+        cleanJson = cleanJson.trim()
+        
+        const extractedData = JSON.parse(cleanJson)
+        const direccionDocumento = extractedData.direccion_completa
+        
+        // Verificar con Google Maps
+        const googleResult = await verifyAddressWithGoogleMaps(direccionDocumento)
+        
+        if (googleResult.success) {
+          const similarity = calculateAddressSimilarity(direccionDocumento, googleResult.formatted_address)
+          
+          return NextResponse.json({
+            result: JSON.stringify(extractedData, null, 2),
+            addressVerification: {
+              direccion_documento: direccionDocumento,
+              tipo_documento: extractedData.tipo_documento,
+              nombre_servicio: extractedData.nombre_servicio,
+              direccion_google: googleResult.formatted_address,
+              coordenadas: { lat: googleResult.lat, lng: googleResult.lng },
+              coincidencia: similarity.percentage,
+              diferencias: similarity.differences,
+              link_google_maps: `https://www.google.com/maps?q=${googleResult.lat},${googleResult.lng}`
+            }
+          })
+        } else {
+          return NextResponse.json({
+            result: JSON.stringify(extractedData, null, 2),
+            addressVerification: {
+              direccion_documento: direccionDocumento,
+              tipo_documento: extractedData.tipo_documento,
+              nombre_servicio: extractedData.nombre_servicio,
+              direccion_google: googleResult.formatted_address,
+              coordenadas: { lat: 0, lng: 0 },
+              coincidencia: 0,
+              diferencias: ['No se pudo verificar la dirección con Google Maps. Verifica que la API Key esté configurada correctamente.'],
+              link_google_maps: `https://www.google.com/maps/search/${encodeURIComponent(direccionDocumento)}`
+            }
+          })
+        }
+      } catch (parseError) {
+        console.log('Error procesando address-verifier:', parseError)
+        return NextResponse.json({ result: resultText })
+      }
+    }
 
     // Para skills que generan Excel, intentar parsear JSON y generar CSV
     if (skillId === 'pdf-to-excel' || skillId === 'invoice-organizer') {

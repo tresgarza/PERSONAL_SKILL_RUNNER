@@ -17,6 +17,16 @@ const SKILLS = [
     tested: true,
   },
   {
+    id: 'address-verifier',
+    name: 'Verificador de Direcciones',
+    icon: '🏠',
+    description: 'Extrae direcciones de recibos (CFE, agua, gas, Telmex) y las verifica contra Google Maps',
+    category: 'Verificación',
+    acceptedFiles: '.pdf,.jpg,.png,.jpeg',
+    placeholder: 'Ejemplo: "Verifica la dirección de este recibo de CFE"',
+    tested: false,
+  },
+  {
     id: 'invoice-organizer',
     name: 'Organizador de Facturas',
     icon: '🧾',
@@ -68,11 +78,23 @@ const SKILLS = [
   },
 ]
 
+interface AddressVerification {
+  direccion_documento: string
+  tipo_documento: string
+  nombre_servicio: string
+  direccion_google: string
+  coordenadas: { lat: number; lng: number }
+  coincidencia: number
+  diferencias: string[]
+  link_google_maps: string
+}
+
 interface SkillResult {
   result: string
   csv?: string
   csvFileName?: string
   jsonData?: Record<string, unknown>
+  addressVerification?: AddressVerification
 }
 
 export default function Home() {
@@ -85,6 +107,13 @@ export default function Home() {
   const [userInput, setUserInput] = useState('')
   const [result, setResult] = useState<SkillResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text)
+    setCopied(label)
+    setTimeout(() => setCopied(null), 2000)
+  }
 
   // Verificar si ya está autenticado (localStorage)
   useEffect(() => {
@@ -402,8 +431,82 @@ export default function Home() {
                     </div>
                   )}
 
+                  {/* Verificación de dirección */}
+                  {result?.addressVerification && (
+                    <div className="address-verification">
+                      <div className="address-header">
+                        <span className="doc-type">{result.addressVerification.tipo_documento}</span>
+                        <span className="service-name">{result.addressVerification.nombre_servicio}</span>
+                      </div>
+                      
+                      <div className="address-comparison">
+                        <div className="address-box document">
+                          <div className="address-label">📄 Dirección en Documento</div>
+                          <div className="address-text">{result.addressVerification.direccion_documento}</div>
+                          <button 
+                            className={`copy-btn ${copied === 'doc' ? 'copied' : ''}`}
+                            onClick={() => copyToClipboard(result.addressVerification!.direccion_documento, 'doc')}
+                          >
+                            {copied === 'doc' ? '✓ Copiado' : '📋 Copiar'}
+                          </button>
+                        </div>
+                        
+                        <div className="address-arrow">→</div>
+                        
+                        <div className="address-box google">
+                          <div className="address-label">🗺️ Dirección Google Maps</div>
+                          <div className="address-text">{result.addressVerification.direccion_google}</div>
+                          <div className="address-buttons">
+                            <button 
+                              className={`copy-btn ${copied === 'google' ? 'copied' : ''}`}
+                              onClick={() => copyToClipboard(result.addressVerification!.direccion_google, 'google')}
+                            >
+                              {copied === 'google' ? '✓ Copiado' : '📋 Copiar'}
+                            </button>
+                            <a 
+                              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(result.addressVerification.direccion_google)}`}
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="maps-btn"
+                            >
+                              🗺️ Ver en Maps
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="match-indicator">
+                        <div className="match-label">Coincidencia:</div>
+                        <div className={`match-value ${result.addressVerification.coincidencia >= 80 ? 'high' : result.addressVerification.coincidencia >= 50 ? 'medium' : 'low'}`}>
+                          {result.addressVerification.coincidencia}%
+                        </div>
+                      </div>
+                      
+                      {result.addressVerification.diferencias.length > 0 && (
+                        <div className="differences">
+                          <div className="diff-label">⚠️ Diferencias encontradas:</div>
+                          <ul>
+                            {result.addressVerification.diferencias.map((diff, i) => (
+                              <li key={i}>{diff}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      
+                      <div className="coordinates">
+                        <span>📍 Coordenadas: {result.addressVerification.coordenadas.lat}, {result.addressVerification.coordenadas.lng}</span>
+                        <button 
+                          className={`copy-btn small ${copied === 'coords' ? 'copied' : ''}`}
+                          onClick={() => copyToClipboard(`${result.addressVerification!.coordenadas.lat}, ${result.addressVerification!.coordenadas.lng}`, 'coords')}
+                        >
+                          {copied === 'coords' ? '✓' : '📋'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Respuesta de texto */}
-                  {!result?.csv && (
+                  {!result?.csv && !result?.addressVerification && (
                     <div className="result-content">{result?.result}</div>
                   )}
                 </>
