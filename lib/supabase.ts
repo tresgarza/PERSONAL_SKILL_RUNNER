@@ -54,11 +54,26 @@ export interface SkillData {
   created_at: string
 }
 
-// Supabase client for browser
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+// Supabase client for browser - safe initialization
+function createSupabaseClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+  if (!supabaseUrl || !supabaseAnonKey) {
+    // During build time, if env vars are missing, create a client with placeholder values
+    // This prevents build errors - the actual client will be created at runtime with correct values
+    // Note: This client won't work, but it allows the build to complete
+    console.warn('Supabase environment variables not found. Using placeholder client.')
+    return createClient(
+      'https://placeholder.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0'
+    )
+  }
+
+  return createClient(supabaseUrl, supabaseAnonKey)
+}
+
+export const supabase = createSupabaseClient()
 
 // Helper functions
 export async function signUp(email: string, password: string, fullName?: string) {
