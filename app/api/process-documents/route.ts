@@ -398,7 +398,7 @@ export async function POST(request: NextRequest) {
             ])
           }
           
-          nominaData.push(['TOTAL', '', '', '', '', '', '', sumPercepciones, sumDeducciones, sumDepositado])
+          nominaData.push(['TOTAL', '', '', '', '', '', '', sumPercepciones.toString(), sumDeducciones.toString(), sumDepositado.toString()])
           
           const wsNomina = XLSX.utils.aoa_to_sheet(nominaData)
           wsNomina['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 30 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 15 }]
