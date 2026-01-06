@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
+import { validateAddressWithSepomex, getColoniasByCP, getLocationByCP } from '@/lib/sepomex'
+import JSZip from 'jszip'
+import fs from 'fs'
+import path from 'path'
 
 // Función para verificar dirección con Google Maps Geocoding API
 async function verifyAddressWithGoogleMaps(address: string): Promise<{
@@ -62,40 +66,227 @@ async function verifyAddressWithGoogleMaps(address: string): Promise<{
   }
 }
 
-// Función para calcular similitud entre direcciones
-function calculateAddressSimilarity(addr1: string, addr2: string): { percentage: number; differences: string[] } {
-  const normalize = (s: string) => s.toLowerCase()
+// Abreviaturas y sinónimos comunes en direcciones mexicanas
+const ADDRESS_ABBREVIATIONS: Record<string, string[]> = {
+  'nuevo leon': ['n.l.', 'nl', 'nvo leon', 'nvo. leon'],
+  'ciudad de mexico': ['cdmx', 'ciudad de méxico', 'df', 'd.f.', 'distrito federal'],
+  'jalisco': ['jal', 'jal.'],
+  'estado de mexico': ['edomex', 'edo. mex.', 'edo mex', 'méx', 'mex'],
+  'baja california': ['bc', 'b.c.'],
+  'baja california sur': ['bcs', 'b.c.s.'],
+  'aguascalientes': ['ags', 'ags.'],
+  'chihuahua': ['chih', 'chih.'],
+  'coahuila': ['coah', 'coah.'],
+  'guanajuato': ['gto', 'gto.'],
+  'michoacan': ['mich', 'mich.'],
+  'queretaro': ['qro', 'qro.'],
+  'san luis potosi': ['slp', 's.l.p.'],
+  'tamaulipas': ['tamps', 'tamps.'],
+  'veracruz': ['ver', 'ver.'],
+  'yucatan': ['yuc', 'yuc.'],
+  'calle': ['c.', 'c', 'cl', 'cl.'],
+  'avenida': ['av', 'av.', 'avda', 'avda.'],
+  'boulevard': ['blvd', 'blvd.', 'bulevar'],
+  'colonia': ['col', 'col.'],
+  'fraccionamiento': ['fracc', 'fracc.', 'frac', 'frac.'],
+  'numero': ['num', 'num.', 'no', 'no.', '#'],
+  'interior': ['int', 'int.'],
+  'departamento': ['depto', 'depto.', 'dpto', 'dpto.'],
+}
+
+// Palabras que no aportan a la comparación
+const NOISE_WORDS = ['calle', 'c', 'colonia', 'col', 'cp', 'codigo', 'postal', 'mexico', 'méxico', 'numero', 'num', 'no', 'int', 'interior', '#']
+
+// Normalizar dirección para comparación
+function normalizeAddress(addr: string): string {
+  let normalized = addr.toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remover acentos
-    .replace(/[.,#-]/g, ' ')
+    .replace(/[.,#\-\/]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   
-  const n1 = normalize(addr1)
-  const n2 = normalize(addr2)
-  
-  const words1 = n1.split(' ').filter(w => w.length > 1)
-  const words2 = n2.split(' ').filter(w => w.length > 1)
-  
-  // Palabras que coinciden
-  const matches = words1.filter(w => words2.some(w2 => w2.includes(w) || w.includes(w2)))
-  const percentage = Math.round((matches.length / Math.max(words1.length, words2.length)) * 100)
-  
-  // Encontrar diferencias
-  const differences: string[] = []
-  
-  // Palabras en documento pero no en Google
-  const missingInGoogle = words1.filter(w => !words2.some(w2 => w2.includes(w) || w.includes(w2)))
-  if (missingInGoogle.length > 0) {
-    differences.push(`"${missingInGoogle.join(', ')}" no aparece en Google Maps`)
+  // Expandir abreviaturas a forma canónica
+  for (const [canonical, abbrevs] of Object.entries(ADDRESS_ABBREVIATIONS)) {
+    for (const abbrev of abbrevs) {
+      const regex = new RegExp(`\\b${abbrev.replace(/\./g, '\\.')}\\b`, 'gi')
+      normalized = normalized.replace(regex, canonical)
+    }
   }
   
-  // Palabras en Google pero no en documento
-  const missingInDoc = words2.filter(w => !words1.some(w1 => w1.includes(w) || w.includes(w1)))
-  if (missingInDoc.length > 0) {
-    differences.push(`Google Maps incluye: "${missingInDoc.join(', ')}"`)
+  return normalized
+}
+
+// Extraer componentes clave de una dirección
+function extractAddressComponents(addr: string): {
+  streetNumber: string
+  streetName: string
+  colony: string
+  postalCode: string
+  city: string
+  state: string
+} {
+  const normalized = normalizeAddress(addr)
+  
+  // Extraer código postal (5 dígitos)
+  const cpMatch = normalized.match(/\b(\d{5})\b/)
+  const postalCode = cpMatch ? cpMatch[1] : ''
+  
+  // Extraer número de calle
+  const numMatch = normalized.match(/\b(\d+)\b/)
+  const streetNumber = numMatch ? numMatch[1] : ''
+  
+  // Extraer estado (buscar estados conocidos)
+  const states = ['nuevo leon', 'jalisco', 'ciudad de mexico', 'estado de mexico', 'guanajuato', 
+                  'queretaro', 'coahuila', 'tamaulipas', 'chihuahua', 'veracruz', 'puebla', 
+                  'yucatan', 'michoacan', 'oaxaca', 'sonora', 'sinaloa', 'baja california']
+  let state = ''
+  for (const s of states) {
+    if (normalized.includes(s)) {
+      state = s
+      break
+    }
+  }
+  
+  // Extraer ciudad (Monterrey, Guadalajara, etc.)
+  const cities = ['monterrey', 'guadalajara', 'mexico', 'puebla', 'tijuana', 'leon', 'juarez',
+                  'torreon', 'merida', 'queretaro', 'san luis potosi', 'aguascalientes', 'hermosillo',
+                  'saltillo', 'mexicali', 'culiacan', 'chihuahua', 'morelia', 'cancun', 'azcapotzalco']
+  let city = ''
+  for (const c of cities) {
+    if (normalized.includes(c)) {
+      city = c
+      break
+    }
+  }
+  
+  // Extraer colonia y calle (más complejo, usar palabras restantes)
+  const words = normalized.split(' ').filter(w => w.length > 2 && !NOISE_WORDS.includes(w))
+  
+  return {
+    streetNumber,
+    streetName: words.slice(0, 2).join(' '), // Primeras palabras significativas
+    colony: words.slice(2, 4).join(' '), // Siguientes palabras
+    postalCode,
+    city,
+    state
+  }
+}
+
+// Función para calcular similitud entre direcciones (MEJORADA)
+function calculateAddressSimilarity(addr1: string, addr2: string): { percentage: number; differences: string[] } {
+  const comp1 = extractAddressComponents(addr1)
+  const comp2 = extractAddressComponents(addr2)
+  
+  const differences: string[] = []
+  let totalScore = 0
+  let maxScore = 0
+  
+  // Comparar número de calle (peso: 30 puntos) - MUY IMPORTANTE
+  maxScore += 30
+  if (comp1.streetNumber && comp2.streetNumber) {
+    if (comp1.streetNumber === comp2.streetNumber) {
+      totalScore += 30
+    } else {
+      differences.push(`Número diferente: "${comp1.streetNumber}" vs "${comp2.streetNumber}"`)
+    }
+  } else if (comp1.streetNumber || comp2.streetNumber) {
+    totalScore += 15 // Parcial si uno tiene número
+  }
+  
+  // Comparar código postal (peso: 25 puntos) - MUY IMPORTANTE
+  maxScore += 25
+  if (comp1.postalCode && comp2.postalCode) {
+    if (comp1.postalCode === comp2.postalCode) {
+      totalScore += 25
+    } else {
+      differences.push(`CP diferente: "${comp1.postalCode}" vs "${comp2.postalCode}"`)
+    }
+  } else if (!comp1.postalCode && !comp2.postalCode) {
+    totalScore += 12 // Sin CP en ambos, neutral
+  }
+  
+  // Comparar nombre de calle (peso: 20 puntos)
+  maxScore += 20
+  const street1Words = normalizeAddress(addr1).split(' ').filter(w => w.length > 2 && !NOISE_WORDS.includes(w) && !/^\d+$/.test(w))
+  const street2Words = normalizeAddress(addr2).split(' ').filter(w => w.length > 2 && !NOISE_WORDS.includes(w) && !/^\d+$/.test(w))
+  
+  // Buscar coincidencias de palabras clave de calle
+  const streetMatches = street1Words.filter(w1 => 
+    street2Words.some(w2 => w1.includes(w2) || w2.includes(w1) || levenshteinSimilarity(w1, w2) > 0.7)
+  )
+  const streetScore = Math.min(20, (streetMatches.length / Math.max(1, Math.min(street1Words.length, street2Words.length))) * 20)
+  totalScore += streetScore
+  
+  // Comparar ciudad (peso: 15 puntos)
+  maxScore += 15
+  if (comp1.city && comp2.city) {
+    if (comp1.city === comp2.city || comp1.city.includes(comp2.city) || comp2.city.includes(comp1.city)) {
+      totalScore += 15
+    }
+  } else {
+    totalScore += 7 // Parcial si no se detectó ciudad
+  }
+  
+  // Comparar estado (peso: 10 puntos)
+  maxScore += 10
+  if (comp1.state && comp2.state) {
+    if (comp1.state === comp2.state) {
+      totalScore += 10
+    }
+  } else {
+    totalScore += 5 // Parcial si no se detectó estado
+  }
+  
+  const percentage = Math.round((totalScore / maxScore) * 100)
+  
+  // Si el porcentaje es alto pero hay diferencias menores, limpiar diferencias
+  if (percentage >= 85 && differences.length > 0) {
+    // Solo mantener diferencias críticas (número y CP)
+    const criticalDiffs = differences.filter(d => d.includes('Número diferente') || d.includes('CP diferente'))
+    if (criticalDiffs.length === 0) {
+      differences.length = 0 // Limpiar diferencias menores
+    }
+  }
+  
+  // Si coinciden número Y código postal, es muy probable que sea la misma dirección
+  if (comp1.streetNumber === comp2.streetNumber && comp1.postalCode === comp2.postalCode && 
+      comp1.streetNumber && comp1.postalCode) {
+    return { 
+      percentage: Math.max(percentage, 95), 
+      differences: differences.length === 0 ? [] : differences 
+    }
   }
   
   return { percentage, differences }
+}
+
+// Calcular similitud de Levenshtein normalizada (0-1)
+function levenshteinSimilarity(s1: string, s2: string): number {
+  if (s1 === s2) return 1
+  if (s1.length === 0 || s2.length === 0) return 0
+  
+  const matrix: number[][] = []
+  
+  for (let i = 0; i <= s1.length; i++) {
+    matrix[i] = [i]
+  }
+  for (let j = 0; j <= s2.length; j++) {
+    matrix[0][j] = j
+  }
+  
+  for (let i = 1; i <= s1.length; i++) {
+    for (let j = 1; j <= s2.length; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      )
+    }
+  }
+  
+  const distance = matrix[s1.length][s2.length]
+  return 1 - (distance / Math.max(s1.length, s2.length))
 }
 
 // Prompts para generar datos estructurados (JSON)
@@ -213,6 +404,174 @@ Responde en formato estructurado.
 Eres un experto en creación de contenido.
 Ayuda a escribir contenido de alta calidad.
 `,
+  'document-organizer': `
+Eres un experto en análisis y clasificación de documentos mexicanos.
+
+Analiza cada documento y determina:
+1. Tipo de documento (COMPROBANTE_DE_NOMINA, IDENTIFICACION_OFICIAL, ESTADO_DE_CUENTA, COMPROBANTE_DE_DOMICILIO, OTRO)
+2. Nombre completo del cliente/persona
+3. Fecha del documento (formato DD_MM_AAAA)
+4. Todos los datos importantes según el tipo de documento
+
+RESPONDE ÚNICAMENTE con JSON válido (sin markdown, sin backticks):
+{
+  "tipo_documento": "COMPROBANTE_DE_NOMINA|IDENTIFICACION_OFICIAL|ESTADO_DE_CUENTA|COMPROBANTE_DE_DOMICILIO|OTRO",
+  "nombre_cliente": "NOMBRE COMPLETO",
+  "fecha_documento": "DD_MM_AAAA",
+  "datos_extraidos": {
+    // Todos los datos relevantes según el tipo de documento
+  }
+}
+
+TIPOS DE DOCUMENTOS:
+- COMPROBANTE_DE_NOMINA: Recibos de nómina, constancias laborales
+- IDENTIFICACION_OFICIAL: INE, Pasaporte, Licencia de conducir
+- ESTADO_DE_CUENTA: Estados de cuenta bancarios
+- COMPROBANTE_DE_DOMICILIO: Recibos de CFE, agua, gas, Telmex
+- OTRO: Cualquier otro documento
+`,
+}
+
+// Función para procesar múltiples documentos
+async function processDocumentOrganizer(files: File[], apiKey: string): Promise<NextResponse> {
+  const client = new Anthropic({ apiKey })
+  const documentsData: Array<{
+    nombre_cliente: string
+    tipo_documento: string
+    fecha_documento: string
+    datos_extraidos: Record<string, any>
+    nombre_archivo_original: string
+    nombre_archivo_nuevo: string
+  }> = []
+  
+  const zip = new JSZip()
+
+  // Procesar cada archivo
+  for (const file of files) {
+    try {
+      const bytes = await file.arrayBuffer()
+      const buffer = Buffer.from(bytes)
+      const base64Data = buffer.toString('base64')
+      
+      const messageContent: Anthropic.MessageCreateParams['messages'][0]['content'] = []
+      
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        messageContent.push({
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'application/pdf',
+            data: base64Data,
+          },
+        })
+      } else if (file.type.startsWith('image/')) {
+        const mediaType = file.type as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+        messageContent.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: mediaType,
+            data: base64Data,
+          },
+        })
+      }
+      
+      messageContent.push({
+        type: 'text',
+        text: 'Analiza este documento y extrae todos los datos importantes. Identifica el tipo de documento, nombre del cliente, fecha y todos los datos relevantes.',
+      })
+
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 16000,
+        system: SKILL_PROMPTS['document-organizer'],
+        messages: [
+          {
+            role: 'user',
+            content: messageContent,
+          },
+        ],
+      })
+
+      const resultText = response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n')
+
+      // Parsear JSON
+      let cleanJson = resultText.trim()
+      if (cleanJson.startsWith('```json')) cleanJson = cleanJson.slice(7)
+      if (cleanJson.startsWith('```')) cleanJson = cleanJson.slice(3)
+      if (cleanJson.endsWith('```')) cleanJson = cleanJson.slice(0, -3)
+      cleanJson = cleanJson.trim()
+
+      const docData = JSON.parse(cleanJson)
+      
+      // Generar nombre de archivo nuevo
+      const nombreCliente = docData.nombre_cliente?.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase() || 'SIN_NOMBRE'
+      const tipoDoc = docData.tipo_documento?.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase() || 'OTRO'
+      const fecha = docData.fecha_documento || 'SIN_FECHA'
+      const extension = file.name.split('.').pop() || 'pdf'
+      const nombreArchivoNuevo = `${nombreCliente}_${tipoDoc}_${fecha}.${extension}`
+
+      documentsData.push({
+        nombre_cliente: docData.nombre_cliente || 'N/A',
+        tipo_documento: docData.tipo_documento || 'OTRO',
+        fecha_documento: docData.fecha_documento || 'N/A',
+        datos_extraidos: docData.datos_extraidos || {},
+        nombre_archivo_original: file.name,
+        nombre_archivo_nuevo: nombreArchivoNuevo,
+      })
+
+      // Agregar archivo al ZIP con el nuevo nombre
+      zip.file(nombreArchivoNuevo, buffer)
+    } catch (error) {
+      console.error(`Error procesando archivo ${file.name}:`, error)
+      // Continuar con el siguiente archivo aunque haya error
+    }
+  }
+
+  // Generar ZIP
+  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' })
+  const zipBase64 = zipBuffer.toString('base64')
+  
+  // Guardar ZIP temporalmente (en producción usarías un servicio de almacenamiento)
+  const tempDir = path.join(process.cwd(), 'tmp')
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true })
+  }
+  
+  const zipFileName = `documentos_organizados_${Date.now()}.zip`
+  const zipPath = path.join(tempDir, zipFileName)
+  fs.writeFileSync(zipPath, zipBuffer)
+  
+  // Generar CSV con los datos
+  const csvHeaders = ['Nombre Cliente', 'Tipo Documento', 'Fecha', 'Archivo Original', 'Archivo Nuevo', 'Datos Extraídos']
+  const csvRows = documentsData.map(doc => [
+    doc.nombre_cliente,
+    doc.tipo_documento,
+    doc.fecha_documento,
+    doc.nombre_archivo_original,
+    doc.nombre_archivo_nuevo,
+    JSON.stringify(doc.datos_extraidos),
+  ])
+  
+  const csvContent = [
+    csvHeaders.join(','),
+    ...csvRows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+  ].join('\n')
+
+  // Retornar respuesta con URL del ZIP (en producción usarías una URL pública)
+  const zipUrl = `/api/download-zip?file=${zipFileName}`
+
+  return NextResponse.json({
+    result: `Se procesaron ${documentsData.length} documentos exitosamente.`,
+    csv: csvContent,
+    csvFileName: 'documentos_organizados.csv',
+    documentsData,
+    zipUrl,
+    zipFileName,
+  })
 }
 
 export async function POST(request: NextRequest) {
@@ -221,6 +580,7 @@ export async function POST(request: NextRequest) {
     const skillId = formData.get('skillId') as string
     const userInput = formData.get('userInput') as string
     const file = formData.get('file') as File | null
+    const files = formData.getAll('files') as File[]
 
     if (!skillId) {
       return NextResponse.json({ error: 'No se especificó el skill' }, { status: 400 })
@@ -232,6 +592,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ 
         error: 'API Key no configurada. Agrega ANTHROPIC_API_KEY a tu archivo .env.local' 
       }, { status: 500 })
+    }
+
+    // Procesar organizador de documentos (múltiples archivos)
+    if (skillId === 'document-organizer' && files.length > 0) {
+      return await processDocumentOrganizer(files, apiKey)
     }
 
     // Construir el mensaje para Claude
@@ -324,41 +689,193 @@ export async function POST(request: NextRequest) {
         
         const extractedData = JSON.parse(cleanJson)
         const direccionDocumento = extractedData.direccion_completa
+        const direccionExtraida = extractedData.direccion_extraida || {}
         
-        // Verificar con Google Maps
+        // 1. Validar con SEPOMEX (fuente oficial de códigos postales)
+        const sepomexValidation = validateAddressWithSepomex({
+          codigoPostal: direccionExtraida.codigo_postal,
+          colonia: direccionExtraida.colonia,
+          municipio: direccionExtraida.municipio,
+          estado: direccionExtraida.estado
+        })
+        
+        // 2. Verificar con Google Maps
         const googleResult = await verifyAddressWithGoogleMaps(direccionDocumento)
         
+        // 3. Calcular similitud combinada
+        let similarity = { percentage: 0, differences: [] as string[] }
         if (googleResult.success) {
-          const similarity = calculateAddressSimilarity(direccionDocumento, googleResult.formatted_address)
-          
-          return NextResponse.json({
-            result: JSON.stringify(extractedData, null, 2),
-            addressVerification: {
-              direccion_documento: direccionDocumento,
-              tipo_documento: extractedData.tipo_documento,
-              nombre_servicio: extractedData.nombre_servicio,
-              direccion_google: googleResult.formatted_address,
-              coordenadas: { lat: googleResult.lat, lng: googleResult.lng },
-              coincidencia: similarity.percentage,
-              diferencias: similarity.differences,
-              link_google_maps: `https://www.google.com/maps?q=${googleResult.lat},${googleResult.lng}`
-            }
+          similarity = calculateAddressSimilarity(direccionDocumento, googleResult.formatted_address)
+        }
+        
+        // 4. Sistema de alertas de riesgo para mesa de control
+        const alertasRiesgo: Array<{
+          nivel: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO'
+          tipo: string
+          mensaje: string
+          accionRecomendada: string
+        }> = []
+        
+        let coincidenciaFinal = similarity.percentage
+        
+        // ALERTA CRÍTICA: CP no existe en SEPOMEX
+        if (direccionExtraida.codigo_postal && !sepomexValidation.cpExists) {
+          alertasRiesgo.push({
+            nivel: 'CRITICO',
+            tipo: 'CP_INVALIDO',
+            mensaje: `El código postal ${direccionExtraida.codigo_postal} NO existe en el catálogo oficial de SEPOMEX`,
+            accionRecomendada: 'REVISAR MANUALMENTE - Posible fraude o error grave. Verificar con el cliente y solicitar comprobante adicional.'
           })
-        } else {
-          return NextResponse.json({
-            result: JSON.stringify(extractedData, null, 2),
-            addressVerification: {
-              direccion_documento: direccionDocumento,
-              tipo_documento: extractedData.tipo_documento,
-              nombre_servicio: extractedData.nombre_servicio,
-              direccion_google: googleResult.formatted_address,
-              coordenadas: { lat: 0, lng: 0 },
-              coincidencia: 0,
-              diferencias: ['No se pudo verificar la dirección con Google Maps. Verifica que la API Key esté configurada correctamente.'],
-              link_google_maps: `https://www.google.com/maps/search/${encodeURIComponent(direccionDocumento)}`
-            }
+          coincidenciaFinal = Math.min(coincidenciaFinal, 30) // Reducir drásticamente la confianza
+        }
+        
+        // ALERTA ALTA: CP válido pero colonia NO coincide
+        if (sepomexValidation.cpExists && direccionExtraida.colonia && !sepomexValidation.coloniaMatch) {
+          alertasRiesgo.push({
+            nivel: 'ALTO',
+            tipo: 'COLONIA_NO_COINCIDE',
+            mensaje: `La colonia "${direccionExtraida.colonia}" NO corresponde al CP ${direccionExtraida.codigo_postal}`,
+            accionRecomendada: 'VERIFICAR CON CLIENTE - Solicitar aclaración. Puede ser error de captura, dirección antigua o colonia informal.'
+          })
+          coincidenciaFinal = Math.min(coincidenciaFinal, 60)
+        }
+        
+        // ALERTA MEDIA: Municipio no coincide
+        if (sepomexValidation.cpExists && direccionExtraida.municipio && !sepomexValidation.municipioMatch) {
+          alertasRiesgo.push({
+            nivel: 'MEDIO',
+            tipo: 'MUNICIPIO_NO_COINCIDE',
+            mensaje: `El municipio "${direccionExtraida.municipio}" no coincide con el CP ${direccionExtraida.codigo_postal}`,
+            accionRecomendada: 'REVISAR - Puede ser error menor o cambio administrativo. Verificar con datos oficiales de SEPOMEX.'
+          })
+          coincidenciaFinal = Math.min(coincidenciaFinal, 75)
+        }
+        
+        // ALERTA MEDIA: Estado no coincide
+        if (sepomexValidation.cpExists && direccionExtraida.estado && !sepomexValidation.estadoMatch) {
+          alertasRiesgo.push({
+            nivel: 'MEDIO',
+            tipo: 'ESTADO_NO_COINCIDE',
+            mensaje: `El estado "${direccionExtraida.estado}" no coincide con el CP ${direccionExtraida.codigo_postal}`,
+            accionRecomendada: 'VERIFICAR - Error posible en el documento o cambio de entidad federativa.'
+          })
+          coincidenciaFinal = Math.min(coincidenciaFinal, 70)
+        }
+        
+        // ALERTA MEDIA: Google Maps no encuentra la dirección
+        if (!googleResult.success && direccionExtraida.codigo_postal) {
+          alertasRiesgo.push({
+            nivel: 'MEDIO',
+            tipo: 'GOOGLE_NO_ENCONTRO',
+            mensaje: 'Google Maps no pudo geocodificar esta dirección',
+            accionRecomendada: 'REVISAR MANUALMENTE - La dirección puede ser incorrecta, incompleta o muy nueva.'
+          })
+          coincidenciaFinal = Math.min(coincidenciaFinal, 50)
+        }
+        
+        // ALERTA BAJA: Coincidencia baja entre documento y Google Maps
+        if (googleResult.success && similarity.percentage < 60) {
+          alertasRiesgo.push({
+            nivel: 'BAJO',
+            tipo: 'COINCIDENCIA_BAJA',
+            mensaje: `Baja coincidencia (${similarity.percentage}%) entre documento y Google Maps`,
+            accionRecomendada: 'REVISAR - Puede haber diferencias menores en formato pero la dirección es válida.'
           })
         }
+        
+        // Validaciones positivas
+        const validacionesExtras: string[] = []
+        
+        if (sepomexValidation.cpExists) {
+          validacionesExtras.push('✅ CP válido según SEPOMEX')
+          
+          if (sepomexValidation.coloniaMatch) {
+            validacionesExtras.push('✅ Colonia coincide con CP')
+            coincidenciaFinal = Math.min(100, coincidenciaFinal + 10)
+          }
+          
+          if (sepomexValidation.municipioMatch) {
+            validacionesExtras.push('✅ Municipio correcto')
+            coincidenciaFinal = Math.min(100, coincidenciaFinal + 5)
+          }
+          
+          if (sepomexValidation.estadoMatch) {
+            validacionesExtras.push('✅ Estado correcto')
+            coincidenciaFinal = Math.min(100, coincidenciaFinal + 5)
+          }
+          
+          // Si SEPOMEX valida todo y Google encontró la dirección, alta confianza
+          if (sepomexValidation.coloniaMatch && googleResult.success) {
+            coincidenciaFinal = Math.max(coincidenciaFinal, 90)
+          }
+        }
+        
+        // Determinar estado general de validación
+        let estadoValidacion: 'APROBADO' | 'REVISION_REQUERIDA' | 'RECHAZADO' = 'APROBADO'
+        if (alertasRiesgo.some(a => a.nivel === 'CRITICO')) {
+          estadoValidacion = 'RECHAZADO'
+        } else if (alertasRiesgo.some(a => a.nivel === 'ALTO' || a.nivel === 'MEDIO')) {
+          estadoValidacion = 'REVISION_REQUERIDA'
+        } else if (coincidenciaFinal >= 85 && sepomexValidation.cpExists && sepomexValidation.coloniaMatch) {
+          estadoValidacion = 'APROBADO'
+        }
+        
+        // 5. Obtener colonias válidas para el CP (sugerencias)
+        const coloniasValidas = direccionExtraida.codigo_postal 
+          ? getColoniasByCP(direccionExtraida.codigo_postal)
+          : []
+        
+        // 6. Obtener datos oficiales de SEPOMEX
+        const datosOficiales = sepomexValidation.officialData ? {
+          colonia_oficial: sepomexValidation.officialData.colonia,
+          municipio_oficial: sepomexValidation.officialData.municipio,
+          estado_oficial: sepomexValidation.officialData.estado,
+          ciudad_oficial: sepomexValidation.officialData.ciudad
+        } : null
+        
+        return NextResponse.json({
+          result: JSON.stringify(extractedData, null, 2),
+          addressVerification: {
+            direccion_documento: direccionDocumento,
+            tipo_documento: extractedData.tipo_documento,
+            nombre_servicio: extractedData.nombre_servicio,
+            direccion_google: googleResult.success ? googleResult.formatted_address : 'No se pudo verificar',
+            coordenadas: { lat: googleResult.lat, lng: googleResult.lng },
+            coincidencia: coincidenciaFinal,
+            diferencias: similarity.differences,
+            link_google_maps: googleResult.success 
+              ? `https://www.google.com/maps?q=${googleResult.lat},${googleResult.lng}`
+              : `https://www.google.com/maps/search/${encodeURIComponent(direccionDocumento)}`,
+            // Validación SEPOMEX
+            validacion_sepomex: {
+              cp_valido: sepomexValidation.cpExists,
+              colonia_coincide: sepomexValidation.coloniaMatch,
+              municipio_coincide: sepomexValidation.municipioMatch,
+              estado_coincide: sepomexValidation.estadoMatch,
+              validaciones: validacionesExtras,
+              sugerencias_sepomex: sepomexValidation.suggestions,
+              colonias_validas_para_cp: coloniasValidas.slice(0, 10),
+              datos_oficiales: datosOficiales
+            },
+            // Sistema de alertas para mesa de control
+            alertas_riesgo: alertasRiesgo,
+            estado_validacion: estadoValidacion,
+            resumen_mesa_control: {
+              puede_aprobar: estadoValidacion === 'APROBADO',
+              requiere_revision: estadoValidacion === 'REVISION_REQUERIDA',
+              debe_rechazar: estadoValidacion === 'RECHAZADO',
+              nivel_riesgo_maximo: alertasRiesgo.length > 0 
+                ? alertasRiesgo.reduce((max, a) => {
+                    const niveles = { CRITICO: 4, ALTO: 3, MEDIO: 2, BAJO: 1 }
+                    return niveles[a.nivel] > niveles[max] ? a.nivel : max
+                  }, alertasRiesgo[0].nivel as 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO')
+                : null,
+              total_alertas: alertasRiesgo.length,
+              alertas_criticas: alertasRiesgo.filter(a => a.nivel === 'CRITICO').length,
+              alertas_altas: alertasRiesgo.filter(a => a.nivel === 'ALTO').length
+            }
+          }
+        })
       } catch (parseError) {
         console.log('Error procesando address-verifier:', parseError)
         return NextResponse.json({ result: resultText })

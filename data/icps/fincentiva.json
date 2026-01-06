@@ -1,0 +1,138 @@
+{
+  "id": "fincentiva",
+  "name": "FINCENTIVA",
+  "description": "Financiera B2B - Préstamos de nómina para empresas",
+  "logo": "💰",
+  "color": "#10B981",
+  
+  "icp_summary": "Empresas con nómina formal, plantilla grande (50-1000), RH estructurado y alta necesidad de liquidez para sus empleados",
+  
+  "apollo_filters": {
+    "employee_count_min": 50,
+    "employee_count_max": 1000,
+    "locations": ["Nuevo Leon", "Monterrey"],
+    "locations_secondary": ["Mexico"],
+    "location_priority": "Nuevo León es prioridad, resto de México es secundario",
+    "industries_core": [
+      "manufacturing",
+      "automotive",
+      "food production",
+      "pharmaceuticals",
+      "logistics",
+      "transportation",
+      "warehousing",
+      "retail",
+      "call center",
+      "business process outsourcing",
+      "facilities management",
+      "security services"
+    ],
+    "industries_secondary": [
+      "agriculture",
+      "food processing",
+      "construction",
+      "real estate development",
+      "hospital",
+      "healthcare"
+    ],
+    "industries_avoid": [
+      "restaurants",
+      "bars",
+      "cafes",
+      "startups",
+      "freelance",
+      "consulting"
+    ]
+  },
+  
+  "target_titles": {
+    "primary": [
+      "HR Manager",
+      "Human Resources Manager",
+      "Gerente de Recursos Humanos",
+      "Head of People",
+      "Director de RH",
+      "HR Business Partner",
+      "Gerente de Nómina",
+      "Payroll Manager"
+    ],
+    "secondary": [
+      "Admin Manager",
+      "Gerente Administrativo",
+      "Finance Manager",
+      "Gerente de Finanzas",
+      "Operations Manager",
+      "Gerente de Operaciones"
+    ]
+  },
+  
+  "seniorities": ["manager", "director", "vp"],
+  
+  "departments": ["human_resources", "finance", "operations"],
+  
+  "tiers": [
+    {
+      "level": 1,
+      "name": "CORE ICP",
+      "color": "#10B981",
+      "industries": ["Manufactura/Industria", "Logística/Transporte", "Retail Organizado", "Servicios Corporativos (BPO, Call Centers)"],
+      "why": "Nómina formal, plantilla grande, rotación controlable, RH estructurado, alta necesidad de liquidez",
+      "risk": "Bajo",
+      "scalability": "Muy Alta"
+    },
+    {
+      "level": 2,
+      "name": "BUEN ICP",
+      "color": "#F59E0B",
+      "industries": ["Agroindustria Formal", "Construcción Formal", "Salud Privada"],
+      "why": "Empleo formal pero con consideraciones de estacionalidad o subcontratación",
+      "risk": "Medio",
+      "scalability": "Alta"
+    },
+    {
+      "level": 3,
+      "name": "ICP OPORTUNIDAD",
+      "color": "#F97316",
+      "industries": ["Gobierno/Paraestatales", "Educación Privada"],
+      "why": "Estabilidad pero procesos largos y burocracia",
+      "risk": "Medio-Alto",
+      "scalability": "Media"
+    }
+  ],
+  
+  "messaging": {
+    "headline": "Un beneficio real para empleados, sin afectar flujo ni generar pasivos",
+    "pain_points": [
+      "Empleados pidiendo adelantos constantemente",
+      "RH perdiendo tiempo manejando solicitudes de dinero",
+      "Alta rotación por falta de beneficios",
+      "Préstamos informales entre empleados"
+    ],
+    "value_props": [
+      "Reduce adelantos y fricción en nómina",
+      "Sin prestar dinero de la empresa",
+      "Beneficio masivo, controlado y sin carga para RH",
+      "Retención de talento operativo"
+    ]
+  },
+
+  "qualification_criteria": {
+    "must_have": [
+      "Nómina formal y estructurada",
+      "Mínimo 50 empleados",
+      "RH o Administración identificable",
+      "Operación estable (no startup)"
+    ],
+    "nice_to_have": [
+      "Múltiples sucursales/plantas",
+      "Alta rotación actual",
+      "Sin programa de beneficios actual"
+    ],
+    "disqualifiers": [
+      "Nómina irregular o mixta",
+      "Menos de 50 empleados",
+      "Sin RH formal",
+      "Alta informalidad"
+    ]
+  }
+}

@@ -1,0 +1,166 @@
+{
+  "id": "tresgarza",
+  "name": "TRES GARZA",
+  "description": "Distribuidora de productos de limpieza e higiene industrial",
+  "logo": "🧹",
+  "color": "#3B82F6",
+  
+  "icp_summary": "Negocios de operación continua y alto flujo donde el consumo de insumos es diario, el volumen es alto y repetitivo, y quedarse sin producto detiene o degrada la operación",
+  
+  "apollo_filters": {
+    "employee_count_min": 20,
+    "employee_count_max": 500,
+    "locations": ["Nuevo Leon", "Monterrey"],
+    "locations_secondary": ["Mexico"],
+    "location_priority": "Nuevo León es prioridad, resto de México es secundario",
+    "industries_core": [
+      "gas station",
+      "fuel",
+      "petroleum",
+      "logistics",
+      "transportation",
+      "trucking",
+      "warehousing",
+      "distribution center",
+      "manufacturing",
+      "industrial",
+      "shopping center",
+      "retail plaza"
+    ],
+    "industries_secondary": [
+      "hotel",
+      "hospitality",
+      "hospital",
+      "clinic",
+      "automotive dealership",
+      "car wash",
+      "gym",
+      "fitness center"
+    ],
+    "industries_avoid": [
+      "restaurant",
+      "cafe",
+      "bar",
+      "small office",
+      "consulting",
+      "software",
+      "marketing agency"
+    ]
+  },
+  
+  "target_titles": {
+    "primary": [
+      "Operations Manager",
+      "Gerente de Operaciones",
+      "Facility Manager",
+      "Gerente de Mantenimiento",
+      "Regional Manager",
+      "Gerente Regional",
+      "Store Manager",
+      "Administrador"
+    ],
+    "secondary": [
+      "Purchasing Manager",
+      "Gerente de Compras",
+      "General Manager",
+      "Gerente General",
+      "Owner",
+      "Dueño",
+      "Director de Operaciones"
+    ]
+  },
+  
+  "seniorities": ["owner", "c_suite", "vp", "director", "manager"],
+  
+  "departments": ["operations", "facilities", "purchasing"],
+  
+  "tiers": [
+    {
+      "level": 1,
+      "name": "ICP ANCLA",
+      "color": "#10B981",
+      "industries": ["Gasolineras/Estaciones de Servicio"],
+      "why": "Operación 24/7, baños críticos, alto tránsito, consumo no negociable, volumen constante, sucursales replicables",
+      "risk": "Muy Bajo",
+      "scalability": "Muy Alta",
+      "products": ["Papel higiénico industrial", "Toallas de papel", "Jabón", "Desinfectantes", "Químicos de alto rendimiento"]
+    },
+    {
+      "level": 2,
+      "name": "ICP ESTRATÉGICO",
+      "color": "#3B82F6",
+      "industries": ["Centros de Transporte/Logística", "Autotransporte/Flotillas", "Plantas Industriales", "Plazas Comerciales"],
+      "why": "Mismo ADN que gasolineras: operación continua, mucho personal, baños críticos, alto desgaste",
+      "risk": "Bajo",
+      "scalability": "Alta"
+    },
+    {
+      "level": 3,
+      "name": "ICP SECUNDARIO",
+      "color": "#F59E0B",
+      "industries": ["Hoteles", "Hospitales Privados", "Gimnasios Grandes", "Autolavados"],
+      "why": "Alto consumo pero ciclos de compra más variables",
+      "risk": "Medio",
+      "scalability": "Media"
+    }
+  ],
+  
+  "messaging": {
+    "headline": "Nunca te quedes sin insumos en operación crítica",
+    "tagline": "Aseguramos operación continua en negocios de alto flujo",
+    "pain_points": [
+      "Quedarse sin insumos críticos en plena operación",
+      "Proveedores que fallan en entregas",
+      "Calidad inconsistente de productos",
+      "Baños sucios = mala reputación"
+    ],
+    "value_props": [
+      "Entrega confiable y puntual",
+      "Volumen garantizado",
+      "Un solo proveedor para todo",
+      "Reposición programada"
+    ]
+  },
+
+  "qualification_criteria": {
+    "must_have": [
+      "Opera 6+ días por semana",
+      "Atiende público o personal masivo",
+      "Tiene baños de alto uso",
+      "Requiere reposición semanal",
+      "Ticket mensual potencial > $15,000 MXN"
+    ],
+    "nice_to_have": [
+      "Múltiples sucursales",
+      "Operación 24/7",
+      "Proveedor actual poco confiable"
+    ],
+    "disqualifiers": [
+      "Operación intermitente",
+      "Bajo flujo de personas",
+      "Compras esporádicas",
+      "Ticket < $5,000/mes"
+    ]
+  },
+  
+  "best_customer_profile": {
+    "type": "Gasolinera",
+    "why_perfect": [
+      "Operación 24/7",
+      "Baños = punto crítico de reputación", 
+      "Alto tránsito = desgaste acelerado",
+      "Consumo no negociable",
+      "Volumen constante y predecible",
+      "Sucursales replicables"
+    ],
+    "typical_products": [
+      "Papel higiénico industrial",
+      "Toallas de papel",
+      "Jabón y desinfectantes",
+      "Limpieza pesada de baños",
+      "Trapos, fibras, bolsas",
+      "Químicos de alto rendimiento"
+    ],
+    "buying_pattern": "Pedidos grandes, reposición semanal, poca variedad de SKUs, alta estandarización"
+  }
+}

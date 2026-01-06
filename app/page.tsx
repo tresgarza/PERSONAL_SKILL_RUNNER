@@ -1,11 +1,22 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
-
-const ACCESS_CODE = 'FINCENTIVA2026'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import DocumentViewer from '../components/DocumentViewer'
+import { useAuth } from '../lib/auth-context'
+import { trackSkillUsage, updateSkillUsage, saveSkillData } from '../lib/supabase'
 
 // Skills disponibles
-const SKILLS = [
+const SKILLS: Array<{
+  id: string
+  name: string
+  icon: string
+  description: string
+  category: string
+  acceptedFiles: string
+  placeholder: string
+  tested: boolean
+  externalLink?: string
+}> = [
   {
     id: 'pdf-to-excel',
     name: 'PDF → Excel',
@@ -17,6 +28,16 @@ const SKILLS = [
     tested: true,
   },
   {
+    id: 'cp-validator',
+    name: 'Validador de CP',
+    icon: '📮',
+    description: 'Valida códigos postales contra el catálogo oficial de SEPOMEX y obtén información detallada',
+    category: 'Verificación',
+    acceptedFiles: '',
+    placeholder: '',
+    tested: true,
+  },
+  {
     id: 'address-verifier',
     name: 'Verificador de Direcciones',
     icon: '🏠',
@@ -24,7 +45,40 @@ const SKILLS = [
     category: 'Verificación',
     acceptedFiles: '.pdf,.jpg,.png,.jpeg',
     placeholder: 'Ejemplo: "Verifica la dirección de este recibo de CFE"',
+    tested: true,
+  },
+  {
+    id: 'document-organizer',
+    name: 'Organizador de Documentos',
+    icon: '📚',
+    description: 'Procesa múltiples documentos, identifica su tipo, extrae datos importantes y genera un ZIP organizado',
+    category: 'Documentos',
+    acceptedFiles: '.pdf,.jpg,.png,.jpeg',
+    placeholder: 'Sube múltiples archivos para organizarlos automáticamente',
+    tested: true,
+  },
+  {
+    id: 'prospection-ai',
+    name: 'Prospección con IA',
+    icon: '🎯',
+    description: 'Busca leads en Apollo, enriquece contactos con emails y genera mensajes personalizados con IA',
+    category: 'Ventas',
+    acceptedFiles: '',
+    placeholder: '',
+    tested: true,
+    externalLink: '/prospeccion',
+  },
+  {
+    id: 'presentation-creator',
+    name: 'Creador de Presentaciones',
+    icon: '📊',
+    description: 'Crea presentaciones PPTX profesionales con diseño visual, gráficos y layouts personalizados usando html2pptx',
+    category: 'Ventas',
+    acceptedFiles: '.pptx,.pdf',
+    placeholder: 'Describe tu presentación: tema, audiencia, número de slides y estilo deseado...',
     tested: false,
+    // Skill relacionado: .cursor/anthropic-official-skills/skills/pptx/SKILL.md
+    // Funcionalidades: html2pptx workflow, paletas de color, layouts, charts, templates
   },
   {
     id: 'invoice-organizer',
@@ -76,7 +130,136 @@ const SKILLS = [
     placeholder: 'Describe el tema sobre el que quieres escribir...',
     tested: false,
   },
+  // ===== SKILLS DE VENTAS/MARKETING (PENDIENTES) =====
+  {
+    id: 'proposal-generator',
+    name: 'Generador de Propuestas',
+    icon: '📋',
+    description: 'Genera propuestas comerciales PDF personalizadas con datos del prospecto, beneficios por industria y casos de éxito',
+    category: 'Ventas',
+    acceptedFiles: '.pdf,.docx',
+    placeholder: 'Ingresa datos del prospecto: empresa, industria, tamaño, necesidades...',
+    tested: false,
+  },
+  {
+    id: 'followup-sequencer',
+    name: 'Secuenciador de Follow-ups',
+    icon: '📨',
+    description: 'Genera secuencias completas de 5-7 emails de seguimiento: introducción, valor, caso de éxito, urgencia y break-up',
+    category: 'Ventas',
+    acceptedFiles: '',
+    placeholder: 'Describe el prospecto y el contexto del primer contacto...',
+    tested: false,
+  },
+  {
+    id: 'competitor-analyzer',
+    name: 'Analizador de Competencia',
+    icon: '🔍',
+    description: 'Analiza competidores: propuesta de valor, precios, diferenciadores, debilidades y talking points para vendedores',
+    category: 'Ventas',
+    acceptedFiles: '.txt,.pdf',
+    placeholder: 'Ingresa URL del competidor o nombre de empresa...',
+    tested: false,
+  },
+  {
+    id: 'linkedin-content',
+    name: 'Contenido para LinkedIn',
+    icon: '💼',
+    description: 'Genera posts de LinkedIn para founders, vendedores y empresa: carruseles, posts de texto y encuestas',
+    category: 'Marketing',
+    acceptedFiles: '.txt,.md',
+    placeholder: 'Describe el tema o mensaje que quieres comunicar...',
+    tested: false,
+  },
+  {
+    id: 'lead-scorer',
+    name: 'Calificador de Leads',
+    icon: '⭐',
+    description: 'Califica leads con score 1-100, probabilidad de cierre, objeciones probables y recomendación de siguiente paso',
+    category: 'Ventas',
+    acceptedFiles: '.csv,.xlsx',
+    placeholder: 'Ingresa datos del prospecto para calificar...',
+    tested: false,
+  },
+  {
+    id: 'call-scripts',
+    name: 'Scripts de Llamada',
+    icon: '📞',
+    description: 'Genera scripts para cold calls, discovery, demos, manejo de objeciones y cierre, personalizados por industria',
+    category: 'Ventas',
+    acceptedFiles: '',
+    placeholder: 'Describe el tipo de llamada y el perfil del prospecto...',
+    tested: false,
+  },
+  {
+    id: 'case-study-creator',
+    name: 'Creador de Casos de Éxito',
+    icon: '🏆',
+    description: 'Crea casos de éxito: one-pager PDF, post LinkedIn, slide para presentaciones y email para prospectos similares',
+    category: 'Marketing',
+    acceptedFiles: '.txt,.pdf,.docx',
+    placeholder: 'Ingresa datos del cliente, métricas de éxito y testimonial...',
+    tested: false,
+  },
+  // ===== SKILLS DE UTILIDAD (PENDIENTES) =====
+  {
+    id: 'raffle-picker',
+    name: 'Selector de Ganadores',
+    icon: '🎰',
+    description: 'Selecciona ganadores aleatorios de listas, CSV, Excel o Google Sheets para rifas, sorteos y concursos',
+    category: 'Productividad',
+    acceptedFiles: '.csv,.xlsx,.txt',
+    placeholder: 'Pega la lista de participantes o sube un archivo CSV/Excel...',
+    tested: false,
+    // Skill relacionado: .cursor/awesome-claude-skills/raffle-winner-picker/SKILL.md
+    // Funcionalidades: selección criptográficamente segura, múltiples ganadores, exclusiones, ponderación
+  },
+  {
+    id: 'video-downloader',
+    name: 'Descargador de Videos',
+    icon: '📹',
+    description: 'Descarga videos de YouTube con opciones de calidad (1080p, 720p, etc.) y formato (mp4, webm, mp3 audio)',
+    category: 'Productividad',
+    acceptedFiles: '',
+    placeholder: 'Pega la URL del video de YouTube que deseas descargar...',
+    tested: false,
+    // Skill relacionado: .cursor/awesome-claude-skills/video-downloader/SKILL.md
+    // Funcionalidades: yt-dlp, múltiples calidades, audio-only, custom output directory
+  },
 ]
+
+interface SepomexValidation {
+  cp_valido: boolean
+  colonia_coincide: boolean
+  municipio_coincide: boolean
+  estado_coincide: boolean
+  validaciones: string[]
+  sugerencias_sepomex: string[]
+  colonias_validas_para_cp: string[]
+  datos_oficiales: {
+    colonia_oficial: string
+    municipio_oficial: string
+    estado_oficial: string
+    ciudad_oficial: string
+  } | null
+}
+
+interface AlertaRiesgo {
+  nivel: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO'
+  tipo: string
+  mensaje: string
+  accionRecomendada: string
+}
+
+interface ResumenMesaControl {
+  puede_aprobar: boolean
+  requiere_revision: boolean
+  debe_rechazar: boolean
+  nivel_riesgo_maximo: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO' | null
+  total_alertas: number
+  alertas_criticas: number
+  alertas_altas: number
+}
 
 interface AddressVerification {
   direccion_documento: string
@@ -87,6 +270,19 @@ interface AddressVerification {
   coincidencia: number
   diferencias: string[]
   link_google_maps: string
+  validacion_sepomex?: SepomexValidation
+  alertas_riesgo?: AlertaRiesgo[]
+  estado_validacion?: 'APROBADO' | 'REVISION_REQUERIDA' | 'RECHAZADO'
+  resumen_mesa_control?: ResumenMesaControl
+}
+
+interface PayrollAnalysis {
+  cantidad_nominas: number
+  promedio_ingreso: number
+  periodicidad: string
+  ingreso_mensual_estimado: number
+  sueldos_encontrados: number[]
+  descripcion_periodicidad: string
 }
 
 interface SkillResult {
@@ -95,19 +291,61 @@ interface SkillResult {
   csvFileName?: string
   jsonData?: Record<string, unknown>
   addressVerification?: AddressVerification
+  zipUrl?: string
+  zipFileName?: string
+  documentsData?: Array<{
+    nombre_cliente: string
+    tipo_documento: string
+    fecha_documento: string
+    datos_extraidos: Record<string, any>
+    nombre_archivo_original: string
+    nombre_archivo_nuevo: string
+  }>
+  payrollAnalysis?: PayrollAnalysis
 }
 
+// Este componente no usa searchParams ni params, pero Next.js 15 muestra advertencias
+// durante el desarrollo cuando las herramientas inspeccionan el componente.
+// Estas advertencias no afectan la funcionalidad y pueden ser ignoradas.
 export default function Home() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [accessCode, setAccessCode] = useState('')
-  const [codeError, setCodeError] = useState(false)
+  // Supabase Auth
+  const { user, loading: authLoading, signIn, signOut, isAdmin } = useAuth()
+  
+  // Auth form states
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [authLoading2, setAuthLoading2] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  
+  // Notification for pending skills
+  const [showNotification, setShowNotification] = useState(false)
+  const [notificationMessage, setNotificationMessage] = useState('')
+  
   const [selectedSkill, setSelectedSkill] = useState<typeof SKILLS[0] | null>(null)
   const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [userInput, setUserInput] = useState('')
   const [result, setResult] = useState<SkillResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
+  
+  // Estados para barra de progreso
+  const [progress, setProgress] = useState({
+    percentage: 0,
+    message: '',
+    current: 0,
+    total: 0,
+    step: '',
+  })
+  
+  // Estados para validador de CP
+  const [cpInput, setCpInput] = useState('')
+  const [cpResult, setCpResult] = useState<any>(null)
+  const [isValidatingCp, setIsValidatingCp] = useState(false)
+  
+  // Ref para hacer scroll al panel de ejecución
+  const executionPanelRef = useRef<HTMLDivElement>(null)
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text)
@@ -115,47 +353,64 @@ export default function Home() {
     setTimeout(() => setCopied(null), 2000)
   }
 
-  // Verificar si ya está autenticado (localStorage)
-  useEffect(() => {
-    const saved = localStorage.getItem('skill_runner_auth')
-    if (saved === 'true') {
-      setIsAuthenticated(true)
-    }
-  }, [])
-
-  const handleLogin = () => {
-    if (accessCode.toUpperCase() === ACCESS_CODE) {
-      setIsAuthenticated(true)
-      localStorage.setItem('skill_runner_auth', 'true')
-      setCodeError(false)
-    } else {
-      setCodeError(true)
+  // Handle login form submission
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setAuthError('')
+    setAuthLoading2(true)
+    
+    try {
+      await signIn(authEmail, authPassword)
+    } catch (error: unknown) {
+      const err = error as Error
+      setAuthError(err.message || 'Error de autenticación')
+    } finally {
+      setAuthLoading2(false)
     }
   }
 
-  const handleLogout = () => {
-    setIsAuthenticated(false)
-    localStorage.removeItem('skill_runner_auth')
+  const handleLogout = async () => {
+    try {
+      await signOut()
+    } catch (error) {
+      console.error('Error signing out:', error)
+    }
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      handleLogin()
+      handleAuth(e as unknown as React.FormEvent)
     }
   }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0])
+    if (e.target.files) {
+      if (selectedSkill?.id === 'document-organizer') {
+        // Permitir múltiples archivos para el organizador
+        setFiles(Array.from(e.target.files))
+        setFile(null)
+      } else {
+        // Un solo archivo para otros skills
+        setFile(e.target.files[0])
+        setFiles([])
+      }
     }
   }
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0])
+    if (e.dataTransfer.files) {
+      if (selectedSkill?.id === 'document-organizer') {
+        // Permitir múltiples archivos para el organizador
+        setFiles(Array.from(e.dataTransfer.files))
+        setFile(null)
+      } else {
+        // Un solo archivo para otros skills
+        setFile(e.dataTransfer.files[0])
+        setFiles([])
+      }
     }
-  }, [])
+  }, [selectedSkill])
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -191,36 +446,158 @@ export default function Home() {
     URL.revokeObjectURL(url)
   }
 
+  const downloadZip = async () => {
+    if (!result?.zipUrl || !result?.zipFileName) return
+    
+    try {
+      const response = await fetch(result.zipUrl)
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = result.zipFileName
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setResult({ result: `Error al descargar ZIP: ${error instanceof Error ? error.message : 'Error desconocido'}` })
+    }
+  }
+
   const executeSkill = async () => {
     if (!selectedSkill) return
     
+    // Validar que haya archivos
+    if (selectedSkill.id === 'document-organizer') {
+      if (files.length === 0) {
+        setResult({ result: 'Error: Debes subir al menos un archivo' })
+        return
+      }
+    } else {
+      if (!file && selectedSkill.acceptedFiles) {
+        setResult({ result: 'Error: Debes subir un archivo' })
+        return
+      }
+    }
+    
     setIsLoading(true)
     setResult(null)
+    setProgress({ percentage: 0, message: 'Iniciando...', current: 0, total: 0, step: '' })
     
     try {
-      const formData = new FormData()
-      formData.append('skillId', selectedSkill.id)
-      formData.append('userInput', userInput)
-      if (file) {
-        formData.append('file', file)
-      }
-      
-      const response = await fetch('/api/execute-skill', {
-        method: 'POST',
-        body: formData,
-      })
-      
-      const data = await response.json()
-      
-      if (data.error) {
-        setResult({ result: `Error: ${data.error}` })
+      // Usar endpoint SSE para organizador de documentos
+      if (selectedSkill.id === 'document-organizer') {
+        const formData = new FormData()
+        files.forEach((f) => {
+          formData.append('files', f)
+        })
+        
+        const response = await fetch('/api/process-documents', {
+          method: 'POST',
+          body: formData,
+        })
+        
+        if (!response.body) {
+          throw new Error('No se pudo establecer conexión de streaming')
+        }
+        
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          
+          const text = decoder.decode(value)
+          const lines = text.split('\n')
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6))
+                
+                if (data.type === 'progress' || data.type === 'start') {
+                  setProgress({
+                    percentage: data.percentage || 0,
+                    message: data.message || '',
+                    current: data.current || 0,
+                    total: data.total || 0,
+                    step: data.step || '',
+                  })
+                } else if (data.type === 'complete') {
+                  setProgress({
+                    percentage: 100,
+                    message: data.message,
+                    current: data.result?.documentsData?.length || 0,
+                    total: data.result?.documentsData?.length || 0,
+                    step: 'complete',
+                  })
+                  setResult({
+                    result: data.message,
+                    csv: data.result.csv,
+                    csvFileName: data.result.csvFileName,
+                    documentsData: data.result.documentsData,
+                    zipUrl: data.result.zipUrl,
+                    zipFileName: data.result.zipFileName,
+                    payrollAnalysis: data.result.payrollAnalysis,
+                  })
+                } else if (data.type === 'error') {
+                  setResult({ result: `Error: ${data.message}` })
+                }
+              } catch (e) {
+                // Ignorar líneas mal formadas
+              }
+            }
+          }
+        }
       } else {
-        setResult(data)
+        // Otros skills usan el endpoint normal
+        const formData = new FormData()
+        formData.append('skillId', selectedSkill.id)
+        formData.append('userInput', userInput)
+        
+        if (file) {
+          formData.append('file', file)
+        }
+        
+        const response = await fetch('/api/execute-skill', {
+          method: 'POST',
+          body: formData,
+        })
+        
+        const data = await response.json()
+        
+        if (data.error) {
+          setResult({ result: `Error: ${data.error}` })
+        } else {
+          setResult(data)
+        }
       }
     } catch (error) {
       setResult({ result: `Error: ${error instanceof Error ? error.message : 'Error desconocido'}` })
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const validatePostalCode = async () => {
+    if (!cpInput || !/^\d{5}$/.test(cpInput)) {
+      setCpResult({ error: 'Ingresa un código postal válido de 5 dígitos' })
+      return
+    }
+
+    setIsValidatingCp(true)
+    setCpResult(null)
+
+    try {
+      const response = await fetch(`/api/validate-cp?cp=${cpInput}`)
+      const data = await response.json()
+      setCpResult(data)
+    } catch (error) {
+      setCpResult({ error: 'Error al validar el código postal' })
+    } finally {
+      setIsValidatingCp(false)
     }
   }
 
@@ -230,48 +607,81 @@ export default function Home() {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
-  // Pantalla de login
-  if (!isAuthenticated) {
+  // Pantalla de carga
+  if (authLoading) {
+    return (
+      <div className="login-container">
+        <div className="login-card">
+          <div className="login-logo">⚡</div>
+          <h1>Skill Runner</h1>
+          <p>Cargando...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Pantalla de login (solo login, sin registro)
+  if (!user) {
     return (
       <div className="login-container">
         <div className="login-card">
           <div className="login-logo">🔐</div>
           <h1>Skill Runner</h1>
-          <p>Ingresa el código de acceso</p>
+          <p>Inicia sesión para continuar</p>
           
-          <div className="login-form">
+          <form className="login-form" onSubmit={handleAuth}>
+            <input
+              type="email"
+              value={authEmail}
+              onChange={(e) => {
+                setAuthEmail(e.target.value)
+                setAuthError('')
+              }}
+              placeholder="Correo electrónico"
+              className={authError ? 'error' : ''}
+              autoFocus
+              required
+            />
+            
             <div className="password-input-wrapper">
               <input
                 type={showPassword ? 'text' : 'password'}
-                value={accessCode}
+                value={authPassword}
                 onChange={(e) => {
-                  setAccessCode(e.target.value)
-                  setCodeError(false)
+                  setAuthPassword(e.target.value)
+                  setAuthError('')
                 }}
                 onKeyPress={handleKeyPress}
-                placeholder="Código de acceso"
-                className={codeError ? 'error' : ''}
-                autoFocus
+                placeholder="Contraseña"
+                className={authError ? 'error' : ''}
+                required
+                minLength={6}
               />
               <button 
                 type="button"
                 className="toggle-password"
                 onClick={() => setShowPassword(!showPassword)}
-                title={showPassword ? 'Ocultar código' : 'Mostrar código'}
+                title={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
               >
                 {showPassword ? '🙈' : '👁️'}
               </button>
             </div>
-            {codeError && (
-              <span className="error-message">Código incorrecto</span>
+            
+            {authError && (
+              <span className="error-message">{authError}</span>
             )}
-            <button onClick={handleLogin} className="login-btn">
-              Entrar
+            
+            <button 
+              type="submit" 
+              className="login-btn"
+              disabled={authLoading2}
+            >
+              {authLoading2 ? 'Cargando...' : 'Iniciar sesión'}
             </button>
-          </div>
+          </form>
           
           <p className="login-footer">
-            Powered by Claude AI
+            Powered by Claude AI + Supabase
           </p>
         </div>
       </div>
@@ -280,68 +690,265 @@ export default function Home() {
 
   return (
     <div className="container">
+      {/* Notification Toast */}
+      {showNotification && (
+        <div className="notification-toast">
+          <span className="notification-icon">🚧</span>
+          <span className="notification-message">{notificationMessage}</span>
+        </div>
+      )}
+      
       <header className="header">
         <h1>⚡ Skill Runner</h1>
         <p>Selecciona un skill y ejecuta tareas con Claude AI</p>
-        <button className="logout-btn" onClick={handleLogout}>
-          Cerrar sesión
-        </button>
+        <div className="user-info">
+          <div className="user-info-left">
+            <span className="user-email">{user.email}</span>
+            {isAdmin && <span className="admin-badge">👑 Admin</span>}
+          </div>
+          <button className="logout-btn" onClick={handleLogout}>
+            Cerrar sesión
+          </button>
+        </div>
       </header>
 
       <div className="skills-grid">
         {SKILLS.map((skill) => (
-          <div
-            key={skill.id}
-            className={`skill-card ${selectedSkill?.id === skill.id ? 'selected' : ''}`}
-            onClick={() => {
-              setSelectedSkill(skill)
-              setFile(null)
-              setUserInput('')
-              setResult(null)
-            }}
-          >
-            {skill.tested && (
-              <div className="tested-badge" title="Skill testeado y funcionando">
-                ✓
+          skill.externalLink ? (
+            <a
+              key={skill.id}
+              href={skill.externalLink}
+              className={`skill-card skill-link`}
+            >
+              {skill.tested && (
+                <div className="tested-badge" title="Skill testeado y funcionando">
+                  ✓
+                </div>
+              )}
+              <div className="external-badge" title="Abre en nueva página">
+                ↗
               </div>
-            )}
-            <div className="skill-icon">{skill.icon}</div>
-            <h3>{skill.name}</h3>
-            <p>{skill.description}</p>
-            <span className="skill-category">{skill.category}</span>
-          </div>
+              <div className="skill-icon">{skill.icon}</div>
+              <h3>{skill.name}</h3>
+              <p>{skill.description}</p>
+              <span className="skill-category">{skill.category}</span>
+            </a>
+          ) : (
+            <div
+              key={skill.id}
+              className={`skill-card ${selectedSkill?.id === skill.id ? 'selected' : ''} ${!skill.tested && !isAdmin ? 'skill-locked' : ''}`}
+              onClick={() => {
+                // Si el skill no está testeado y el usuario NO es admin, mostrar notificación
+                if (!skill.tested && !isAdmin) {
+                  setNotificationMessage(`"${skill.name}" está en desarrollo. ¡Próximamente disponible!`)
+                  setShowNotification(true)
+                  setTimeout(() => setShowNotification(false), 3000)
+                  return
+                }
+                
+                setSelectedSkill(skill)
+                setFile(null)
+                setFiles([])
+                setUserInput('')
+                setResult(null)
+                setCpResult(null)
+                setCpInput('')
+                
+                // Hacer scroll al panel de ejecución después de un pequeño delay
+                setTimeout(() => {
+                  executionPanelRef.current?.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'start' 
+                  })
+                }, 100)
+              }}
+            >
+              {skill.tested ? (
+                <div className="tested-badge" title="Skill testeado y funcionando">
+                  ✓
+                </div>
+              ) : (
+                <div className="pending-badge" title={isAdmin ? "Skill en desarrollo (Admin: puedes acceder)" : "Skill en desarrollo"}>
+                  ⏳
+                </div>
+              )}
+              <div className="skill-icon">{skill.icon}</div>
+              <h3>{skill.name}</h3>
+              <p>{skill.description}</p>
+              <span className={`skill-category category-${skill.category.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')}`}>{skill.category}</span>
+            </div>
+          )
         ))}
       </div>
 
       {selectedSkill && (
-        <div className="execution-panel">
+        <div className="execution-panel" ref={executionPanelRef}>
           <h2>
             {selectedSkill.icon} {selectedSkill.name}
           </h2>
 
-          <div
-            className={`dropzone ${file ? 'active' : ''}`}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onClick={() => document.getElementById('file-input')?.click()}
-          >
-            <input
-              id="file-input"
-              type="file"
-              accept={selectedSkill.acceptedFiles}
-              onChange={handleFileChange}
-              style={{ display: 'none' }}
-            />
-            <div className="dropzone-icon">📎</div>
-            <p>
-              <strong>Arrastra un archivo aquí</strong> o haz clic para seleccionar
-            </p>
-            <p style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
-              Acepta: {selectedSkill.acceptedFiles}
-            </p>
-          </div>
+          {/* Validador de CP - Panel especial */}
+          {selectedSkill.id === 'cp-validator' ? (
+            <div className="cp-validator-content">
+              <p className="cp-validator-description">
+                Valida códigos postales contra el catálogo oficial de SEPOMEX y obtén información detallada
+              </p>
+              
+              <div className="cp-input-group">
+                <input
+                  type="text"
+                  className="cp-input"
+                  placeholder="Ejemplo: 64720"
+                  value={cpInput}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/\D/g, '').slice(0, 5)
+                    setCpInput(value)
+                    setCpResult(null)
+                  }}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      validatePostalCode()
+                    }
+                  }}
+                  maxLength={5}
+                />
+                <button
+                  className="validate-cp-btn"
+                  onClick={validatePostalCode}
+                  disabled={isValidatingCp || !cpInput || cpInput.length !== 5}
+                >
+                  {isValidatingCp ? (
+                    <>
+                      <span className="spinner"></span>
+                      Validando...
+                    </>
+                  ) : (
+                    <>
+                      🔍 Validar CP
+                    </>
+                  )}
+                </button>
+              </div>
 
-          {file && (
+              {cpResult && (
+                <div className={`cp-result ${cpResult.existe === false ? 'cp-invalid' : cpResult.existe === true ? 'cp-valid' : 'cp-error'}`}>
+                  {cpResult.error ? (
+                    <div className="cp-error-message">
+                      <span className="error-icon">❌</span>
+                      <span>{cpResult.error}</span>
+                    </div>
+                  ) : cpResult.existe === false ? (
+                    <div className="cp-not-found">
+                      <div className="cp-status-header">
+                        <span className="status-icon">❌</span>
+                        <span className="status-title">Código Postal No Válido</span>
+                      </div>
+                      <div className="cp-status-message">{cpResult.mensaje}</div>
+                    </div>
+                  ) : cpResult.existe === true ? (
+                    <div className="cp-found">
+                      <div className="cp-status-header">
+                        <span className="status-icon">✅</span>
+                        <span className="status-title">Código Postal Válido</span>
+                        <span className="cp-badge">CP {cpResult.cp}</span>
+                      </div>
+
+                      <div className="cp-info-grid">
+                        <div className="cp-info-card">
+                          <div className="cp-info-label">📍 Ubicación</div>
+                          <div className="cp-info-value">
+                            <div><strong>Estado:</strong> {cpResult.ubicacion.estado}</div>
+                            <div><strong>Municipio:</strong> {cpResult.ubicacion.municipio}</div>
+                            {cpResult.ubicacion.ciudad && (
+                              <div><strong>Ciudad:</strong> {cpResult.ubicacion.ciudad}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="cp-info-card">
+                          <div className="cp-info-label">📊 Estadísticas</div>
+                          <div className="cp-info-value">
+                            <div><strong>Total Colonias:</strong> {cpResult.total_colonias}</div>
+                            <div><strong>Total Registros:</strong> {cpResult.total_registros}</div>
+                            <div><strong>Tipos de Asentamiento:</strong> {cpResult.tipos_asentamiento.length}</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="cp-colonias-section">
+                        <div className="cp-section-header">
+                          <span className="cp-section-title">🏘️ Colonias ({cpResult.total_colonias})</span>
+                          <button
+                            className={`copy-btn ${copied === 'colonias' ? 'copied' : ''}`}
+                            onClick={() => copyToClipboard(cpResult.colonias.join(', '), 'colonias')}
+                          >
+                            {copied === 'colonias' ? '✓ Copiado' : '📋 Copiar Lista'}
+                          </button>
+                        </div>
+                        <div className="cp-colonias-list">
+                          {cpResult.colonias.slice(0, 20).map((colonia: string, i: number) => (
+                            <span key={i} className="colonia-badge">{colonia}</span>
+                          ))}
+                          {cpResult.colonias.length > 20 && (
+                            <span className="colonia-more">... y {cpResult.colonias.length - 20} más</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {Object.keys(cpResult.colonias_por_tipo).length > 0 && (
+                        <div className="cp-tipos-section">
+                          <div className="cp-section-title">🏛️ Colonias por Tipo de Asentamiento</div>
+                          {Object.entries(cpResult.colonias_por_tipo).map(([tipo, colonias]: [string, any]) => (
+                            <details key={tipo} className="cp-tipo-details">
+                              <summary>
+                                <strong>{tipo}</strong> ({colonias.length} colonias)
+                              </summary>
+                              <div className="cp-tipo-colonias">
+                                {colonias.map((col: string, i: number) => (
+                                  <span key={i} className="colonia-badge small">{col}</span>
+                                ))}
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div
+                className={`dropzone ${(file || files.length > 0) ? 'active' : ''}`}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onClick={() => document.getElementById('file-input')?.click()}
+              >
+                <input
+                  id="file-input"
+                  type="file"
+                  accept={selectedSkill.acceptedFiles}
+                  onChange={handleFileChange}
+                  multiple={selectedSkill.id === 'document-organizer'}
+                  style={{ display: 'none' }}
+                />
+                <div className="dropzone-icon">📎</div>
+                <p>
+                  <strong>
+                    {selectedSkill.id === 'document-organizer' 
+                      ? 'Arrastra múltiples archivos aquí' 
+                      : 'Arrastra un archivo aquí'}
+                  </strong> o haz clic para seleccionar
+                </p>
+                <p style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
+                  Acepta: {selectedSkill.acceptedFiles}
+                  {selectedSkill.id === 'document-organizer' && ' (múltiples archivos)'}
+                </p>
+              </div>
+
+          {/* Mostrar archivos individuales para skills normales */}
+          {file && selectedSkill.id !== 'document-organizer' && (
             <div className="file-preview">
               <span className="file-icon">📄</span>
               <div className="file-info">
@@ -357,6 +964,44 @@ export default function Home() {
               >
                 ✕
               </button>
+            </div>
+          )}
+
+          {/* Mostrar lista de archivos para organizador de documentos */}
+          {selectedSkill.id === 'document-organizer' && files.length > 0 && (
+            <div className="files-list">
+              <div className="files-list-header">
+                <span>📚 Archivos seleccionados ({files.length})</span>
+                <button 
+                  className="clear-all-btn"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setFiles([])
+                  }}
+                >
+                  Limpiar todo
+                </button>
+              </div>
+              <div className="files-grid">
+                {files.map((f, index) => (
+                  <div key={index} className="file-preview">
+                    <span className="file-icon">📄</span>
+                    <div className="file-info">
+                      <div className="file-name">{f.name}</div>
+                      <div className="file-size">{formatFileSize(f.size)}</div>
+                    </div>
+                    <button 
+                      className="remove-btn"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setFiles(files.filter((_, i) => i !== index))
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -390,20 +1035,68 @@ export default function Home() {
             <div className="result-panel">
               <h3>📋 Resultado</h3>
               {isLoading ? (
-                <div className="loading">
-                  <div className="spinner"></div>
-                  <span>Claude está procesando tu solicitud...</span>
+                <div className="loading-progress">
+                  <div className="progress-header">
+                    <span className="progress-icon">🔄</span>
+                    <span className="progress-title">Procesando...</span>
+                  </div>
+                  
+                  <div className="progress-bar-container">
+                    <div 
+                      className="progress-bar" 
+                      style={{ width: `${progress.percentage}%` }}
+                    />
+                    <span className="progress-percentage">{progress.percentage}%</span>
+                  </div>
+                  
+                  <div className="progress-message">{progress.message}</div>
+                  
+                  {progress.total > 0 && (
+                    <div className="progress-stats">
+                      <span>Documento {progress.current} de {progress.total}</span>
+                      {progress.step && (
+                        <span className={`progress-step ${progress.step}`}>
+                          {progress.step === 'reading' && '📖 Leyendo archivo...'}
+                          {progress.step === 'analyzing' && '🤖 Analizando con IA...'}
+                          {progress.step === 'complete' && '✅ Completado'}
+                          {progress.step === 'error' && '❌ Error'}
+                          {progress.step === 'generating_zip' && '📦 Generando ZIP...'}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
-                  {/* Botones de descarga si hay CSV */}
-                  {result?.csv && (
+                  {/* Botones de descarga - solo mostrar si NO es organizador de documentos */}
+                  {/* El organizador de documentos tiene sus propios botones en DocumentViewer */}
+                  {result?.csv && !result?.documentsData && (
                     <div className="download-buttons">
                       <button className="download-btn excel" onClick={downloadExcel}>
                         📊 Descargar Excel (.xls)
                       </button>
                       <button className="download-btn csv" onClick={downloadCSV}>
                         📄 Descargar CSV
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Botones adicionales para organizador de documentos (ZIP y JSON) */}
+                  {result?.documentsData && result.documentsData.length > 0 && (
+                    <div className="download-buttons">
+                      {result.zipUrl && (
+                        <button className="download-btn zip" onClick={downloadZip}>
+                          📦 Descargar ZIP con Archivos Organizados
+                        </button>
+                      )}
+                      <button 
+                        className="download-btn copy" 
+                        onClick={() => {
+                          const dataText = JSON.stringify(result.documentsData, null, 2)
+                          copyToClipboard(dataText, 'documents')
+                        }}
+                      >
+                        📋 Copiar Datos JSON
                       </button>
                     </div>
                   )}
@@ -429,6 +1122,73 @@ export default function Home() {
                         )}
                       </div>
                     </div>
+                  )}
+
+                  {/* Análisis de Nóminas */}
+                  {result?.payrollAnalysis && (
+                    <div className="payroll-analysis">
+                      <h4>💰 Análisis de Ingresos</h4>
+                      <div className="payroll-grid">
+                        <div className="payroll-stat primary">
+                          <div className="stat-icon">💵</div>
+                          <div className="stat-content">
+                            <span className="stat-label">Ingreso Promedio por Periodo</span>
+                            <span className="stat-value">
+                              ${result.payrollAnalysis.promedio_ingreso.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <div className="payroll-stat success">
+                          <div className="stat-icon">📊</div>
+                          <div className="stat-content">
+                            <span className="stat-label">Ingreso Mensual Estimado</span>
+                            <span className="stat-value">
+                              ${result.payrollAnalysis.ingreso_mensual_estimado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <div className="payroll-stat info">
+                          <div className="stat-icon">📅</div>
+                          <div className="stat-content">
+                            <span className="stat-label">Periodicidad de Pago</span>
+                            <span className="stat-value highlight">{result.payrollAnalysis.periodicidad}</span>
+                            <span className="stat-description">{result.payrollAnalysis.descripcion_periodicidad}</span>
+                          </div>
+                        </div>
+                        
+                        <div className="payroll-stat">
+                          <div className="stat-icon">📄</div>
+                          <div className="stat-content">
+                            <span className="stat-label">Nóminas Analizadas</span>
+                            <span className="stat-value">{result.payrollAnalysis.cantidad_nominas}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {result.payrollAnalysis.sueldos_encontrados.length > 1 && (
+                        <div className="payroll-detail">
+                          <span className="detail-label">Sueldos encontrados:</span>
+                          <div className="sueldos-list">
+                            {result.payrollAnalysis.sueldos_encontrados.map((sueldo, i) => (
+                              <span key={i} className="sueldo-badge">
+                                ${sueldo.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Visor de documentos mejorado */}
+                  {result?.documentsData && result.documentsData.length > 0 && (
+                    <DocumentViewer 
+                      documents={result.documentsData}
+                      clientName={result.documentsData[0]?.nombre_cliente}
+                      payrollAnalysis={result.payrollAnalysis}
+                    />
                   )}
 
                   {/* Verificación de dirección */}
@@ -493,6 +1253,130 @@ export default function Home() {
                         </div>
                       )}
                       
+                      {/* Validación SEPOMEX */}
+                      {result.addressVerification.validacion_sepomex && (
+                        <div className="sepomex-validation">
+                          <div className="sepomex-header">
+                            <span className="sepomex-title">📮 Validación SEPOMEX (Oficial)</span>
+                          </div>
+                          
+                          <div className="sepomex-checks">
+                            {result.addressVerification.validacion_sepomex.validaciones.map((val, i) => (
+                              <div key={i} className={`sepomex-check ${val.startsWith('✅') ? 'valid' : val.startsWith('⚠️') ? 'warning' : ''}`}>
+                                {val}
+                              </div>
+                            ))}
+                          </div>
+                          
+                          {result.addressVerification.validacion_sepomex.sugerencias_sepomex.length > 0 && (
+                            <div className="sepomex-suggestions">
+                              <div className="suggestions-label">💡 Sugerencias:</div>
+                              <ul>
+                                {result.addressVerification.validacion_sepomex.sugerencias_sepomex.map((sug, i) => (
+                                  <li key={i}>{sug}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          
+                          {result.addressVerification.validacion_sepomex.datos_oficiales && (
+                            <div className="sepomex-official">
+                              <div className="official-label">📋 Datos oficiales SEPOMEX:</div>
+                              <div className="official-data">
+                                <span><strong>Colonia:</strong> {result.addressVerification.validacion_sepomex.datos_oficiales.colonia_oficial}</span>
+                                <span><strong>Municipio:</strong> {result.addressVerification.validacion_sepomex.datos_oficiales.municipio_oficial}</span>
+                                <span><strong>Estado:</strong> {result.addressVerification.validacion_sepomex.datos_oficiales.estado_oficial}</span>
+                                {result.addressVerification.validacion_sepomex.datos_oficiales.ciudad_oficial && (
+                                  <span><strong>Ciudad:</strong> {result.addressVerification.validacion_sepomex.datos_oficiales.ciudad_oficial}</span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {result.addressVerification.validacion_sepomex.colonias_validas_para_cp.length > 1 && (
+                            <details className="sepomex-colonias">
+                              <summary>Ver colonias válidas para este CP ({result.addressVerification.validacion_sepomex.colonias_validas_para_cp.length})</summary>
+                              <ul>
+                                {result.addressVerification.validacion_sepomex.colonias_validas_para_cp.map((col, i) => (
+                                  <li key={i}>{col}</li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Sistema de Alertas de Riesgo para Mesa de Control */}
+                      {result.addressVerification.alertas_riesgo && result.addressVerification.alertas_riesgo.length > 0 && (
+                        <div className="mesa-control-alertas">
+                          <div className="mesa-control-header">
+                            <span className="mesa-control-title">🚨 Alertas de Riesgo - Mesa de Control</span>
+                            {result.addressVerification.estado_validacion && (
+                              <span className={`estado-badge ${result.addressVerification.estado_validacion.toLowerCase().replace('_', '-')}`}>
+                                {result.addressVerification.estado_validacion === 'APROBADO' && '✅ APROBADO'}
+                                {result.addressVerification.estado_validacion === 'REVISION_REQUERIDA' && '⚠️ REVISIÓN REQUERIDA'}
+                                {result.addressVerification.estado_validacion === 'RECHAZADO' && '❌ RECHAZADO'}
+                              </span>
+                            )}
+                          </div>
+                          
+                          {result.addressVerification.resumen_mesa_control && (
+                            <div className="resumen-mesa-control">
+                              <div className="resumen-stats">
+                                <div className="stat">
+                                  <span className="stat-label">Total Alertas:</span>
+                                  <span className="stat-value">{result.addressVerification.resumen_mesa_control.total_alertas}</span>
+                                </div>
+                                {result.addressVerification.resumen_mesa_control.alertas_criticas > 0 && (
+                                  <div className="stat critico">
+                                    <span className="stat-label">Críticas:</span>
+                                    <span className="stat-value">{result.addressVerification.resumen_mesa_control.alertas_criticas}</span>
+                                  </div>
+                                )}
+                                {result.addressVerification.resumen_mesa_control.alertas_altas > 0 && (
+                                  <div className="stat alto">
+                                    <span className="stat-label">Altas:</span>
+                                    <span className="stat-value">{result.addressVerification.resumen_mesa_control.alertas_altas}</span>
+                                  </div>
+                                )}
+                              </div>
+                              
+                              <div className="resumen-accion">
+                                {result.addressVerification.resumen_mesa_control.puede_aprobar && (
+                                  <div className="accion-aprobada">✅ Puede aprobarse automáticamente</div>
+                                )}
+                                {result.addressVerification.resumen_mesa_control.requiere_revision && (
+                                  <div className="accion-revision">⚠️ Requiere revisión manual antes de aprobar</div>
+                                )}
+                                {result.addressVerification.resumen_mesa_control.debe_rechazar && (
+                                  <div className="accion-rechazada">❌ Debe rechazarse - Revisar con supervisor</div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          
+                          <div className="alertas-lista">
+                            {result.addressVerification.alertas_riesgo.map((alerta, i) => (
+                              <div key={i} className={`alerta-riesgo nivel-${alerta.nivel.toLowerCase()}`}>
+                                <div className="alerta-header">
+                                  <span className={`alerta-badge ${alerta.nivel.toLowerCase()}`}>
+                                    {alerta.nivel === 'CRITICO' && '🔴 CRÍTICO'}
+                                    {alerta.nivel === 'ALTO' && '🟠 ALTO'}
+                                    {alerta.nivel === 'MEDIO' && '🟡 MEDIO'}
+                                    {alerta.nivel === 'BAJO' && '🔵 BAJO'}
+                                  </span>
+                                  <span className="alerta-tipo">{alerta.tipo.replace(/_/g, ' ')}</span>
+                                </div>
+                                <div className="alerta-mensaje">{alerta.mensaje}</div>
+                                <div className="alerta-accion">
+                                  <strong>Acción recomendada:</strong> {alerta.accionRecomendada}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
                       <div className="coordinates">
                         <span>📍 Coordenadas: {result.addressVerification.coordenadas.lat}, {result.addressVerification.coordenadas.lng}</span>
                         <button 
@@ -512,6 +1396,8 @@ export default function Home() {
                 </>
               )}
             </div>
+          )}
+            </>
           )}
         </div>
       )}
