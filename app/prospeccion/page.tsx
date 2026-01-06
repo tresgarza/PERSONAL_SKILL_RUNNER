@@ -590,6 +590,23 @@ export default function ProspeccionPage() {
   const client = selectedClient ? CLIENTS[selectedClient] : null
   const canSearch = (searchMode === 'preset' && selectedClient) || (searchMode === 'custom' && extractedFilters)
 
+  // Ensure component is mounted
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  if (!mounted) {
+    return (
+      <div className="prospeccion-container">
+        <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+          Cargando...
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="prospeccion-container">
       {/* Header */}
