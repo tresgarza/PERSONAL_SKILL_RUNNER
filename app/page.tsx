@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import DocumentViewer from '../components/DocumentViewer'
+import PDFPreview from '../components/PDFPreview'
 import { useAuth } from '../lib/auth-context'
 import { trackSkillUsage, updateSkillUsage, saveSkillData } from '../lib/supabase'
 
@@ -55,6 +56,16 @@ const SKILLS: Array<{
     category: 'Documentos',
     acceptedFiles: '.pdf,.jpg,.png,.jpeg',
     placeholder: 'Sube múltiples archivos para organizarlos automáticamente',
+    tested: true,
+  },
+  {
+    id: 'pdf-merger',
+    name: 'Combinar PDFs',
+    icon: '🔗',
+    description: 'Combina múltiples PDFs en uno solo. Arrastra y ordena los archivos como desees antes de combinarlos',
+    category: 'Documentos',
+    acceptedFiles: '.pdf',
+    placeholder: 'Sube los PDFs que quieres combinar y ordénalos arrastrándolos',
     tested: true,
   },
   {
@@ -228,6 +239,30 @@ const SKILLS: Array<{
   },
 ]
 
+// Tipos de documentos Fincentiva en orden requerido
+const FINCENTIVA_DOC_TYPES = [
+  'SOLICITUD',
+  'ANEXO A',
+  'TABLA DE AMORTIZACION',
+  'CARATULA',
+  'CONTRATO',
+  'PAGARE',
+  'BURO',
+  'MANDATO'
+] as const
+
+// Emojis para cada tipo de documento
+const DOC_TYPE_ICONS: Record<string, string> = {
+  'SOLICITUD': '📝',
+  'ANEXO A': '📎',
+  'TABLA DE AMORTIZACION': '📊',
+  'CARATULA': '📋',
+  'CONTRATO': '📜',
+  'PAGARE': '💰',
+  'BURO': '🏦',
+  'MANDATO': '✍️'
+}
+
 interface SepomexValidation {
   cp_valido: boolean
   colonia_coincide: boolean
@@ -344,6 +379,22 @@ export default function Home() {
   const [cpResult, setCpResult] = useState<any>(null)
   const [isValidatingCp, setIsValidatingCp] = useState(false)
   
+  // Estados para combinador de PDFs
+  const [pdfOrder, setPdfOrder] = useState<number[]>([])
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
+  const [mergedPdfUrl, setMergedPdfUrl] = useState<string | null>(null)
+  const [pdfMergeMode, setPdfMergeMode] = useState<'general' | 'fincentiva'>('general')
+  const [fincentivaAnalysis, setFincentivaAnalysis] = useState<{
+    identified: Array<{ type: string; index: number; fileName: string }>;
+    unidentified: Array<{ index: number; fileName: string }>;
+    missing: string[];
+    suggestedOrder: number[];
+  } | null>(null)
+  const [showMissingDocsModal, setShowMissingDocsModal] = useState(false)
+  const [isAnalyzingDocs, setIsAnalyzingDocs] = useState(false)
+  // Document types detected for general mode (index -> documentType)
+  const [generalDocTypes, setGeneralDocTypes] = useState<Map<number, string | null>>(new Map())
+  
   // Ref para hacer scroll al panel de ejecución
   const executionPanelRef = useRef<HTMLDivElement>(null)
 
@@ -385,10 +436,18 @@ export default function Home() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      if (selectedSkill?.id === 'document-organizer') {
-        // Permitir múltiples archivos para el organizador
-        setFiles(Array.from(e.target.files))
+      if (selectedSkill?.id === 'document-organizer' || selectedSkill?.id === 'pdf-merger') {
+        // Permitir múltiples archivos para el organizador y combinador de PDFs
+        const newFiles = Array.from(e.target.files).filter(f => 
+          selectedSkill?.id === 'pdf-merger' ? f.type === 'application/pdf' : true
+        )
+        setFiles(newFiles)
         setFile(null)
+        // Inicializar el orden para pdf-merger
+        if (selectedSkill?.id === 'pdf-merger') {
+          setPdfOrder(newFiles.map((_, i) => i))
+          setMergedPdfUrl(null)
+        }
       } else {
         // Un solo archivo para otros skills
         setFile(e.target.files[0])
@@ -400,10 +459,18 @@ export default function Home() {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     if (e.dataTransfer.files) {
-      if (selectedSkill?.id === 'document-organizer') {
-        // Permitir múltiples archivos para el organizador
-        setFiles(Array.from(e.dataTransfer.files))
+      if (selectedSkill?.id === 'document-organizer' || selectedSkill?.id === 'pdf-merger') {
+        // Permitir múltiples archivos para el organizador y combinador de PDFs
+        const newFiles = Array.from(e.dataTransfer.files).filter(f => 
+          selectedSkill?.id === 'pdf-merger' ? f.type === 'application/pdf' : true
+        )
+        setFiles(newFiles)
         setFile(null)
+        // Inicializar el orden para pdf-merger
+        if (selectedSkill?.id === 'pdf-merger') {
+          setPdfOrder(newFiles.map((_, i) => i))
+          setMergedPdfUrl(null)
+        }
       } else {
         // Un solo archivo para otros skills
         setFile(e.dataTransfer.files[0])
@@ -415,6 +482,218 @@ export default function Home() {
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
   }
+
+  // Funciones para combinador de PDFs
+  const handlePdfDragStart = (index: number) => {
+    setDraggedIndex(index)
+  }
+
+  const handlePdfDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault()
+    if (draggedIndex === null) return
+
+    const newOrder = [...pdfOrder]
+    const draggedItem = newOrder[draggedIndex]
+    newOrder.splice(draggedIndex, 1)
+    newOrder.splice(index, 0, draggedItem)
+    setPdfOrder(newOrder)
+    setDraggedIndex(index)
+  }
+
+  const handlePdfDragEnd = () => {
+    setDraggedIndex(null)
+  }
+
+  const removePdf = (index: number) => {
+    const newFiles = files.filter((_, i) => i !== index)
+    setFiles(newFiles)
+    const newOrder = pdfOrder.filter((_, i) => i !== index).map((val, i) => 
+      val > index ? val - 1 : val
+    )
+    setPdfOrder(newOrder.length > 0 ? newOrder : newFiles.map((_, i) => i))
+    setMergedPdfUrl(null)
+  }
+
+  const mergePdfs = async (skipMissingCheck = false) => {
+    if (files.length === 0) {
+      setResult({ result: 'Error: Debes subir al menos un PDF' })
+      return
+    }
+
+    // En modo Fincentiva, verificar documentos faltantes
+    if (pdfMergeMode === 'fincentiva' && fincentivaAnalysis && fincentivaAnalysis.missing.length > 0 && !skipMissingCheck) {
+      setShowMissingDocsModal(true)
+      return
+    }
+
+    setIsLoading(true)
+    setResult(null)
+    setShowMissingDocsModal(false)
+    setProgress({ percentage: 0, message: 'Combinando PDFs...', current: 0, total: files.length, step: '' })
+
+    try {
+      const formData = new FormData()
+      files.forEach((f) => {
+        formData.append('files', f)
+      })
+      formData.append('order', JSON.stringify(pdfOrder))
+      formData.append('mode', pdfMergeMode)
+
+      const response = await fetch('/api/merge-pdfs', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Error al combinar PDFs')
+      }
+
+      const data = await response.json()
+
+      // Convertir base64 a blob y crear URL
+      const binaryString = atob(data.pdf)
+      const bytes = new Uint8Array(binaryString.length)
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i)
+      }
+      const blob = new Blob([bytes], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      setMergedPdfUrl(url)
+
+      setProgress({ percentage: 100, message: 'PDFs combinados exitosamente', current: files.length, total: files.length, step: 'Completado' })
+      
+      let resultMessage = `✅ PDFs combinados exitosamente!\n\nTotal de archivos: ${data.totalFiles}\nTotal de páginas: ${data.totalPages}`
+      
+      if (pdfMergeMode === 'fincentiva' && data.analysis) {
+        resultMessage += `\n\n📋 Modo: Expediente Fincentiva`
+        resultMessage += `\n✅ Documentos identificados: ${data.analysis.identified.length}/${FINCENTIVA_DOC_TYPES.length}`
+        if (data.analysis.missing.length > 0) {
+          resultMessage += `\n⚠️ Documentos faltantes: ${data.analysis.missing.join(', ')}`
+        }
+      }
+      
+      resultMessage += `\n\nHaz clic en "Descargar PDF Combinado" para descargar el archivo.`
+      
+      setResult({ result: resultMessage })
+    } catch (error) {
+      console.error('Error combinando PDFs:', error)
+      setResult({ result: `Error: ${error instanceof Error ? error.message : 'Error desconocido al combinar PDFs'}` })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const downloadMergedPdf = () => {
+    if (!mergedPdfUrl) return
+    
+    const link = document.createElement('a')
+    link.href = mergedPdfUrl
+    link.download = pdfMergeMode === 'fincentiva' 
+      ? `expediente_fincentiva_${Date.now()}.pdf`
+      : `pdf_combinado_${Date.now()}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  // Función para analizar archivos en modo Fincentiva
+  const analyzeForFincentiva = async (filesToAnalyze: File[]) => {
+    if (filesToAnalyze.length === 0) return
+    
+    setIsAnalyzingDocs(true)
+    
+    try {
+      const formData = new FormData()
+      filesToAnalyze.forEach((f) => {
+        formData.append('files', f)
+      })
+      formData.append('mode', 'fincentiva')
+      formData.append('analyzeOnly', 'true')
+
+      const response = await fetch('/api/merge-pdfs', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error('Error al analizar documentos')
+      }
+
+      const data = await response.json()
+      
+      if (data.analysis) {
+        setFincentivaAnalysis(data.analysis)
+        setPdfOrder(data.analysis.suggestedOrder)
+      }
+    } catch (error) {
+      console.error('Error analizando documentos:', error)
+    } finally {
+      setIsAnalyzingDocs(false)
+    }
+  }
+
+  // Función para analizar tipos de documento en modo general
+  const analyzeForGeneral = async (filesToAnalyze: File[]) => {
+    if (filesToAnalyze.length === 0) {
+      setGeneralDocTypes(new Map())
+      return
+    }
+    
+    setIsAnalyzingDocs(true)
+    
+    try {
+      const formData = new FormData()
+      filesToAnalyze.forEach((f) => {
+        formData.append('files', f)
+      })
+      formData.append('mode', 'general')
+      formData.append('analyzeOnly', 'true')
+
+      const response = await fetch('/api/merge-pdfs', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error('Error al analizar documentos')
+      }
+
+      const data = await response.json()
+      
+      if (data.analysis) {
+        // Create map of index -> documentType
+        const newDocTypes = new Map<number, string | null>()
+        data.analysis.identified.forEach((doc: { index: number; type: string }) => {
+          newDocTypes.set(doc.index, doc.type)
+        })
+        data.analysis.unidentified.forEach((doc: { index: number }) => {
+          newDocTypes.set(doc.index, null)
+        })
+        setGeneralDocTypes(newDocTypes)
+      }
+    } catch (error) {
+      console.error('Error analizando documentos:', error)
+    } finally {
+      setIsAnalyzingDocs(false)
+    }
+  }
+
+  // Efecto para re-analizar cuando cambia el modo o los archivos
+  useEffect(() => {
+    if (pdfMergeMode === 'fincentiva' && files.length > 0) {
+      analyzeForFincentiva(files)
+    } else if (pdfMergeMode === 'general') {
+      setFincentivaAnalysis(null)
+      setPdfOrder(files.map((_, i) => i))
+      // Analyze for document types in general mode
+      if (files.length > 0) {
+        analyzeForGeneral(files)
+      } else {
+        setGeneralDocTypes(new Map())
+      }
+    }
+  }, [pdfMergeMode, files])
 
   const downloadCSV = () => {
     if (!result?.csv || !result?.csvFileName) return
@@ -469,9 +748,13 @@ export default function Home() {
     if (!selectedSkill) return
     
     // Validar que haya archivos
-    if (selectedSkill.id === 'document-organizer') {
+    if (selectedSkill.id === 'document-organizer' || selectedSkill.id === 'pdf-merger') {
       if (files.length === 0) {
         setResult({ result: 'Error: Debes subir al menos un archivo' })
+        return
+      }
+      // pdf-merger tiene su propio botón de ejecución
+      if (selectedSkill.id === 'pdf-merger') {
         return
       }
     } else {
@@ -753,6 +1036,13 @@ export default function Home() {
                 setResult(null)
                 setCpResult(null)
                 setCpInput('')
+                // Resetear estado del combinador de PDFs
+                setPdfOrder([])
+                setMergedPdfUrl(null)
+                setDraggedIndex(null)
+                setPdfMergeMode('general')
+                setFincentivaAnalysis(null)
+                setShowMissingDocsModal(false)
                 
                 // Hacer scroll al panel de ejecución después de un pequeño delay
                 setTimeout(() => {
@@ -930,25 +1220,25 @@ export default function Home() {
                   type="file"
                   accept={selectedSkill.acceptedFiles}
                   onChange={handleFileChange}
-                  multiple={selectedSkill.id === 'document-organizer'}
+                  multiple={selectedSkill.id === 'document-organizer' || selectedSkill.id === 'pdf-merger'}
                   style={{ display: 'none' }}
                 />
                 <div className="dropzone-icon">📎</div>
                 <p>
                   <strong>
-                    {selectedSkill.id === 'document-organizer' 
+                    {(selectedSkill.id === 'document-organizer' || selectedSkill.id === 'pdf-merger')
                       ? 'Arrastra múltiples archivos aquí' 
                       : 'Arrastra un archivo aquí'}
                   </strong> o haz clic para seleccionar
                 </p>
                 <p style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
                   Acepta: {selectedSkill.acceptedFiles}
-                  {selectedSkill.id === 'document-organizer' && ' (múltiples archivos)'}
+                  {(selectedSkill.id === 'document-organizer' || selectedSkill.id === 'pdf-merger') && ' (múltiples archivos)'}
                 </p>
               </div>
 
           {/* Mostrar archivos individuales para skills normales */}
-          {file && selectedSkill.id !== 'document-organizer' && (
+          {file && selectedSkill.id !== 'document-organizer' && selectedSkill.id !== 'pdf-merger' && (
             <div className="file-preview">
               <span className="file-icon">📄</span>
               <div className="file-info">
@@ -1005,31 +1295,340 @@ export default function Home() {
             </div>
           )}
 
-          <div className="input-area">
-            <label>Instrucciones adicionales (opcional)</label>
-            <textarea
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              placeholder={selectedSkill.placeholder}
-            />
-          </div>
+          {selectedSkill.id === 'pdf-merger' && (
+            <div className="pdf-merger-content">
+              {/* Selector de modo */}
+              <div className="pdf-mode-selector">
+                <button
+                  className={`mode-btn ${pdfMergeMode === 'general' ? 'active' : ''}`}
+                  onClick={() => setPdfMergeMode('general')}
+                >
+                  <span className="mode-icon">📄</span>
+                  <span className="mode-label">General</span>
+                  <span className="mode-desc">Orden manual</span>
+                </button>
+                <button
+                  className={`mode-btn fincentiva ${pdfMergeMode === 'fincentiva' ? 'active' : ''}`}
+                  onClick={() => setPdfMergeMode('fincentiva')}
+                >
+                  <span className="mode-icon">💰</span>
+                  <span className="mode-label">Fincentiva</span>
+                  <span className="mode-desc">Orden automático</span>
+                </button>
+              </div>
 
-          <button
-            className="execute-btn"
-            onClick={executeSkill}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <>
-                <span className="spinner"></span>
-                Procesando...
-              </>
-            ) : (
-              <>
-                ⚡ Ejecutar Skill
-              </>
-            )}
-          </button>
+              <p className="pdf-merger-description">
+                {pdfMergeMode === 'fincentiva' 
+                  ? 'Sube los documentos del expediente Fincentiva. Se ordenarán automáticamente según el formato requerido.'
+                  : 'Sube los PDFs que quieres combinar y arrastra para ordenarlos. El orden en que aparecen aquí será el orden final del PDF combinado.'
+                }
+              </p>
+
+              {/* Orden Fincentiva esperado */}
+              {pdfMergeMode === 'fincentiva' && (
+                <div className="fincentiva-order-guide">
+                  <p className="guide-title">📋 Orden del Expediente:</p>
+                  <div className="guide-items">
+                    {FINCENTIVA_DOC_TYPES.map((docType, i) => {
+                      const isFound = fincentivaAnalysis?.identified.some(d => d.type === docType)
+                      return (
+                        <span 
+                          key={docType} 
+                          className={`guide-item ${isFound ? 'found' : 'missing'}`}
+                        >
+                          <span className="guide-number">{i + 1}</span>
+                          <span className="guide-icon">{DOC_TYPE_ICONS[docType]}</span>
+                          <span className="guide-name">{docType}</span>
+                          {files.length > 0 && (
+                            <span className="guide-status">
+                              {isFound ? '✅' : '❌'}
+                            </span>
+                          )}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Indicador de análisis */}
+              {isAnalyzingDocs && (
+                <div className="analyzing-docs">
+                  <span className="spinner"></span>
+                  <span>Identificando documentos...</span>
+                </div>
+              )}
+              
+              {files.length > 0 && !isAnalyzingDocs && (
+                <div className="pdf-order-list">
+                  <div className="pdf-order-header">
+                    <span>
+                      {pdfMergeMode === 'fincentiva' 
+                        ? `📋 Documentos del Expediente (${fincentivaAnalysis?.identified.length || 0}/${FINCENTIVA_DOC_TYPES.length} identificados)`
+                        : `📄 Orden de los PDFs (${files.length})`
+                      }
+                    </span>
+                    <button 
+                      className="clear-all-btn"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setFiles([])
+                        setPdfOrder([])
+                        setMergedPdfUrl(null)
+                        setFincentivaAnalysis(null)
+                      }}
+                    >
+                      Limpiar todo
+                    </button>
+                  </div>
+
+                  {/* Vista Fincentiva */}
+                  {pdfMergeMode === 'fincentiva' && fincentivaAnalysis && (
+                    <div className="fincentiva-docs-list">
+                      {/* Documentos identificados */}
+                      {fincentivaAnalysis.identified.length > 0 && (
+                        <div className="docs-section identified">
+                          <p className="docs-section-title">✅ Documentos Identificados</p>
+                          <div className="pdf-preview-grid">
+                            {FINCENTIVA_DOC_TYPES.map((docType, displayIndex) => {
+                              const doc = fincentivaAnalysis.identified.find(d => d.type === docType)
+                              if (!doc) return null
+                              const file = files[doc.index]
+                              return (
+                                <div
+                                  key={doc.index}
+                                  className="pdf-preview-card fincentiva-card"
+                                >
+                                  <div className="preview-order-badge">{displayIndex + 1}</div>
+                                  <button 
+                                    className="preview-remove-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      const newFiles = files.filter((_, i) => i !== doc.index)
+                                      setFiles(newFiles)
+                                      setMergedPdfUrl(null)
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                  <PDFPreview 
+                                    file={file}
+                                    width={140}
+                                    height={180}
+                                    documentType={docType}
+                                    showLabel={true}
+                                  />
+                                  <div className="preview-file-name" title={file.name}>
+                                    {file.name}
+                                  </div>
+                                  <div className="preview-file-size">
+                                    {formatFileSize(file.size)}
+                                  </div>
+                                </div>
+                              )
+                            }).filter(Boolean)}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Documentos no identificados */}
+                      {fincentivaAnalysis.unidentified.length > 0 && (
+                        <div className="docs-section unidentified">
+                          <p className="docs-section-title">⚠️ Documentos No Identificados</p>
+                          <p className="docs-section-hint">Estos archivos se agregarán al final del expediente</p>
+                          <div className="pdf-preview-grid">
+                            {fincentivaAnalysis.unidentified.map((doc, i) => {
+                              const file = files[doc.index]
+                              return (
+                                <div
+                                  key={doc.index}
+                                  className="pdf-preview-card unidentified-card"
+                                >
+                                  <div className="preview-order-badge unidentified">?</div>
+                                  <button 
+                                    className="preview-remove-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      const newFiles = files.filter((_, i) => i !== doc.index)
+                                      setFiles(newFiles)
+                                      setMergedPdfUrl(null)
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                  <PDFPreview 
+                                    file={file}
+                                    width={140}
+                                    height={180}
+                                    documentType={null}
+                                    showLabel={true}
+                                  />
+                                  <div className="preview-file-name" title={file.name}>
+                                    {file.name}
+                                  </div>
+                                  <div className="preview-file-size">
+                                    {formatFileSize(file.size)}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Resumen de documentos faltantes */}
+                      {fincentivaAnalysis.missing.length > 0 && (
+                        <div className="docs-section missing">
+                          <p className="docs-section-title">❌ Documentos Faltantes ({fincentivaAnalysis.missing.length})</p>
+                          <div className="missing-docs-list">
+                            {fincentivaAnalysis.missing.map((docType) => (
+                              <span key={docType} className="missing-doc-badge">
+                                {DOC_TYPE_ICONS[docType]} {docType}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Vista General con Previews */}
+                  {pdfMergeMode === 'general' && (
+                    <div className="pdf-preview-grid general-grid">
+                      {pdfOrder.map((orderIndex, displayIndex) => {
+                        const file = files[orderIndex]
+                        const detectedType = generalDocTypes.get(orderIndex)
+                        return (
+                          <div
+                            key={orderIndex}
+                            className={`pdf-preview-card general-card ${draggedIndex === displayIndex ? 'dragging' : ''}`}
+                            draggable
+                            onDragStart={() => handlePdfDragStart(displayIndex)}
+                            onDragOver={(e) => handlePdfDragOver(e, displayIndex)}
+                            onDragEnd={handlePdfDragEnd}
+                          >
+                            <div className="preview-drag-handle">☰</div>
+                            <div className="preview-order-badge">{displayIndex + 1}</div>
+                            <button 
+                              className="preview-remove-btn"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                removePdf(orderIndex)
+                              }}
+                            >
+                              ✕
+                            </button>
+                            <PDFPreview 
+                              file={file}
+                              width={140}
+                              height={180}
+                              documentType={detectedType}
+                              showLabel={true}
+                            />
+                            <div className="preview-file-name" title={file.name}>
+                              {file.name}
+                            </div>
+                            <div className="preview-file-size">
+                              {formatFileSize(file.size)}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  <button
+                    className={`merge-pdfs-btn ${pdfMergeMode === 'fincentiva' ? 'fincentiva-btn' : ''}`}
+                    onClick={() => mergePdfs()}
+                    disabled={isLoading || files.length === 0}
+                  >
+                    {isLoading ? (
+                      <>
+                        <span className="spinner"></span>
+                        Combinando PDFs...
+                      </>
+                    ) : pdfMergeMode === 'fincentiva' ? (
+                      <>
+                        💰 Generar Expediente Fincentiva
+                      </>
+                    ) : (
+                      <>
+                        🔗 Combinar PDFs
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Modal de documentos faltantes */}
+          {showMissingDocsModal && fincentivaAnalysis && (
+            <div className="modal-overlay" onClick={() => setShowMissingDocsModal(false)}>
+              <div className="missing-docs-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <span className="modal-icon">⚠️</span>
+                  <h3>Documentos Faltantes</h3>
+                </div>
+                <div className="modal-body">
+                  <p>El expediente Fincentiva está incompleto. Faltan los siguientes documentos:</p>
+                  <div className="missing-docs-grid">
+                    {fincentivaAnalysis.missing.map((docType) => (
+                      <div key={docType} className="missing-doc-item">
+                        <span className="doc-icon">{DOC_TYPE_ICONS[docType]}</span>
+                        <span className="doc-name">{docType}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="modal-question">¿Desea continuar de todas formas?</p>
+                </div>
+                <div className="modal-actions">
+                  <button 
+                    className="modal-btn cancel"
+                    onClick={() => setShowMissingDocsModal(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    className="modal-btn confirm"
+                    onClick={() => mergePdfs(true)}
+                  >
+                    Sí, continuar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {selectedSkill.id !== 'pdf-merger' && (
+            <>
+              <div className="input-area">
+                <label>Instrucciones adicionales (opcional)</label>
+                <textarea
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  placeholder={selectedSkill.placeholder}
+                />
+              </div>
+
+              <button
+                className="execute-btn"
+                onClick={executeSkill}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <>
+                    <span className="spinner"></span>
+                    Procesando...
+                  </>
+                ) : (
+                  <>
+                    ⚡ Ejecutar Skill
+                  </>
+                )}
+              </button>
+            </>
+          )}
 
           {(result || isLoading) && (
             <div className="result-panel">
@@ -1068,9 +1667,18 @@ export default function Home() {
                 </div>
               ) : (
                 <>
+                  {/* Botón de descarga para PDF combinado */}
+                  {selectedSkill.id === 'pdf-merger' && mergedPdfUrl && (
+                    <div className="download-buttons">
+                      <button className="download-btn pdf" onClick={downloadMergedPdf}>
+                        📥 Descargar PDF Combinado
+                      </button>
+                    </div>
+                  )}
+
                   {/* Botones de descarga - solo mostrar si NO es organizador de documentos */}
                   {/* El organizador de documentos tiene sus propios botones en DocumentViewer */}
-                  {result?.csv && !result?.documentsData && (
+                  {result?.csv && !result?.documentsData && selectedSkill.id !== 'pdf-merger' && (
                     <div className="download-buttons">
                       <button className="download-btn excel" onClick={downloadExcel}>
                         📊 Descargar Excel (.xls)
