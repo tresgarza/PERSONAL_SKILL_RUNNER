@@ -61,14 +61,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       console.log('🔐 checkAdminStatus: Query result - data:', JSON.stringify(data), 'error:', JSON.stringify(error))
       
-      if (error) {
+      if (error || !data) {
         console.error('🔐 checkAdminStatus: Error fetching role:', JSON.stringify(error))
         setIsAdmin(false)
         return
       }
 
-      const adminStatus = data?.role === 'admin' || data?.role === 'super_admin'
-      console.log('🔐 checkAdminStatus: isAdmin =', adminStatus, '(role:', data?.role, ')')
+      const role = (data as { role: string }).role
+      const adminStatus = role === 'admin' || role === 'super_admin'
+      console.log('🔐 checkAdminStatus: isAdmin =', adminStatus, '(role:', role, ')')
       setIsAdmin(adminStatus)
     } catch (err) {
       console.error('🔐 checkAdminStatus: Exception:', err)
