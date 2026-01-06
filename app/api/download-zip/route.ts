@@ -12,10 +12,12 @@ export async function GET(request: NextRequest) {
     }
 
     // Validar que el archivo esté en el directorio tmp
-    const filePath = path.join(process.cwd(), 'tmp', fileName)
+    // En Vercel/serverless, usar /tmp (único directorio escribible)
+    const tmpDir = '/tmp'
+    const filePath = path.join(tmpDir, fileName)
     
     // Validar que el archivo existe y está en el directorio correcto
-    if (!fs.existsSync(filePath) || !filePath.startsWith(path.join(process.cwd(), 'tmp'))) {
+    if (!fs.existsSync(filePath) || !filePath.startsWith(tmpDir)) {
       return NextResponse.json({ error: 'Archivo no encontrado' }, { status: 404 })
     }
 

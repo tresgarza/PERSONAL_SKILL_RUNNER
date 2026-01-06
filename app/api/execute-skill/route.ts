@@ -535,8 +535,10 @@ async function processDocumentOrganizer(files: File[], apiKey: string): Promise<
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' })
   const zipBase64 = zipBuffer.toString('base64')
   
-  // Guardar ZIP temporalmente (en producción usarías un servicio de almacenamiento)
-  const tempDir = path.join(process.cwd(), 'tmp')
+  // Guardar ZIP temporalmente
+  // En Vercel/serverless, usar /tmp (único directorio escribible)
+  // En desarrollo local, también usar /tmp para consistencia
+  const tempDir = '/tmp'
   if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true })
   }

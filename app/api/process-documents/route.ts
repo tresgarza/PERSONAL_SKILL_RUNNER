@@ -762,7 +762,9 @@ export async function POST(request: NextRequest) {
         })
         
         // Guardar ZIP temporalmente
-        const tempDir = path.join(process.cwd(), 'tmp')
+        // En Vercel/serverless, usar /tmp (único directorio escribible)
+        // En desarrollo local, también usar /tmp para consistencia
+        const tempDir = '/tmp'
         if (!fs.existsSync(tempDir)) {
           fs.mkdirSync(tempDir, { recursive: true })
         }
