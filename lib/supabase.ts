@@ -12,6 +12,9 @@ export interface User {
   updated_at: string
   last_login?: string
   is_active: boolean
+  total_sessions?: number
+  last_active_at?: string
+  total_api_cost?: number
 }
 
 export interface Skill {
@@ -42,6 +45,9 @@ export interface SkillUsage {
   error_message?: string
   created_at: string
   completed_at?: string
+  cost_usd?: number
+  api_provider?: string
+  model_used?: string
 }
 
 export interface SkillData {
@@ -154,9 +160,16 @@ export async function getTestedSkills() {
 export async function trackSkillUsage(
   skillId: string,
   inputType?: string,
-  inputSizeBytes?: number
+  inputSizeBytes?: number,
+  sessionId?: string
 ): Promise<SkillUsage> {
   const user = await getCurrentUser()
+  
+  // Obtener session_id del storage si no se proporciona
+  let finalSessionId = sessionId
+  if (!finalSessionId && typeof window !== 'undefined') {
+    finalSessionId = sessionStorage.getItem('tracking_session_id') || undefined
+  }
   
   const { data, error } = await supabase
     .from('sr_skill_usage')
@@ -165,6 +178,7 @@ export async function trackSkillUsage(
       skill_id: skillId,
       input_type: inputType,
       input_size_bytes: inputSizeBytes,
+      session_id: finalSessionId,
       status: 'pending',
     })
     .select()
@@ -178,7 +192,13 @@ export async function updateSkillUsage(
   usageId: string,
   status: 'processing' | 'completed' | 'failed',
   executionTimeMs?: number,
-  errorMessage?: string
+  errorMessage?: string,
+  apiCost?: {
+    provider: 'anthropic' | 'openai' | 'google' | 'other'
+    model: string
+    inputTokens: number
+    outputTokens: number
+  }
 ) {
   const updateData: Partial<SkillUsage> = { status }
   
@@ -193,6 +213,19 @@ export async function updateSkillUsage(
   if (status === 'completed' || status === 'failed') {
     updateData.completed_at = new Date().toISOString()
   }
+
+  // Si se proporciona información de API, calcular y guardar costo
+  if (apiCost && status === 'completed') {
+    try {
+      const cost = await calculateAndSaveApiCost(usageId, apiCost)
+      updateData.cost_usd = cost.cost_usd
+      updateData.api_provider = apiCost.provider
+      updateData.model_used = apiCost.model
+    } catch (error) {
+      console.error('Error calculating API cost:', error)
+      // Continuar sin costo si falla el cálculo
+    }
+  }
   
   const { data, error } = await supabase
     .from('sr_skill_usage')
@@ -203,6 +236,93 @@ export async function updateSkillUsage(
   
   if (error) throw error
   return data as SkillUsage
+}
+
+// Función helper para calcular y guardar costo de API
+export async function calculateAndSaveApiCost(
+  usageId: string,
+  apiInfo: {
+    provider: 'anthropic' | 'openai' | 'google' | 'other'
+    model: string
+    inputTokens: number
+    outputTokens: number
+  }
+): Promise<ApiCost> {
+  // Calcular costo usando función SQL
+  let { data: costData, error: costError } = await supabase.rpc('calculate_api_cost', {
+    p_provider: apiInfo.provider,
+    p_model: apiInfo.model,
+    p_input_tokens: apiInfo.inputTokens,
+    p_output_tokens: apiInfo.outputTokens,
+  })
+
+  if (costError) {
+    console.error('Error calculating cost:', costError)
+    // Fallback: cálculo manual básico (solo Anthropic)
+    let cost = 0
+    if (apiInfo.provider === 'anthropic') {
+      // Precios aproximados por 1K tokens
+      const inputPrice = 0.003
+      const outputPrice = 0.015
+      cost = (apiInfo.inputTokens / 1000) * inputPrice + (apiInfo.outputTokens / 1000) * outputPrice
+    }
+    costData = cost
+  }
+
+  const totalTokens = apiInfo.inputTokens + apiInfo.outputTokens
+  const costUsd = typeof costData === 'number' ? costData : parseFloat(costData?.toString() || '0')
+
+  // Guardar en sr_api_costs
+  const { data: apiCost, error: insertError } = await supabase
+    .from('sr_api_costs')
+    .insert({
+      usage_id: usageId,
+      provider: apiInfo.provider,
+      model: apiInfo.model,
+      input_tokens: apiInfo.inputTokens,
+      output_tokens: apiInfo.outputTokens,
+      total_tokens: totalTokens,
+      cost_usd: costUsd,
+    })
+    .select()
+    .single()
+
+  if (insertError) {
+    console.error('Error saving API cost:', insertError)
+    throw insertError
+  }
+
+  // Actualizar total_api_cost del usuario
+  const { data: usageData } = await supabase
+    .from('sr_skill_usage')
+    .select('user_id')
+    .eq('id', usageId)
+    .single()
+
+  if (usageData?.user_id) {
+    try {
+      // Leer el valor actual
+      const { data: userData } = await supabase
+        .from('sr_users')
+        .select('total_api_cost')
+        .eq('id', usageData.user_id)
+        .single()
+
+      const currentCost = parseFloat(userData?.total_api_cost?.toString() || '0')
+      const newCost = currentCost + costUsd
+
+      await supabase
+        .from('sr_users')
+        .update({
+          total_api_cost: newCost,
+        })
+        .eq('id', usageData.user_id)
+    } catch (err) {
+      console.error('Error updating user total cost:', err)
+    }
+  }
+
+  return apiCost as ApiCost
 }
 
 // Data collection functions
@@ -243,4 +363,87 @@ export async function getUsageStats(skillId?: string) {
   
   if (error) throw error
   return data
+}
+
+// ============================================
+// Tracking Types
+// ============================================
+
+export interface PageEvent {
+  id: string
+  user_id?: string
+  session_id: string
+  event_type: 'click' | 'navigation' | 'form_submit' | 'download' | 'view' | 'scroll' | 'hover' | 'focus' | 'blur' | 'custom'
+  event_name: string
+  page_path: string
+  element_id?: string
+  element_type?: string
+  element_text?: string
+  metadata?: Record<string, unknown>
+  timestamp: string
+  user_agent?: string
+  ip_address?: string
+  created_at: string
+}
+
+export interface UserSession {
+  id: string
+  user_id?: string
+  session_id: string
+  started_at: string
+  ended_at?: string
+  duration_seconds?: number
+  page_views: number
+  events_count: number
+  referrer?: string
+  device_type: 'desktop' | 'mobile' | 'tablet' | 'unknown'
+  browser?: string
+  os?: string
+  screen_width?: number
+  screen_height?: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ApiCost {
+  id: string
+  usage_id?: string
+  provider: 'anthropic' | 'openai' | 'google' | 'other'
+  model: string
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cost_usd: number
+  pricing_tier?: string
+  created_at: string
+}
+
+export interface PerformanceMetric {
+  id: string
+  user_id?: string
+  session_id?: string
+  page_path: string
+  metric_type: 'page_load' | 'api_response' | 'skill_execution' | 'custom'
+  metric_name: string
+  value: number
+  unit: string
+  metadata?: Record<string, unknown>
+  timestamp: string
+  created_at: string
+}
+
+export interface ErrorLog {
+  id: string
+  user_id?: string
+  session_id?: string
+  error_type: 'javascript' | 'api' | 'skill_execution' | 'network' | 'validation' | 'other'
+  error_message: string
+  error_stack?: string
+  page_path: string
+  user_agent?: string
+  metadata?: Record<string, unknown>
+  resolved: boolean
+  resolved_at?: string
+  resolved_by?: string
+  created_at: string
 }

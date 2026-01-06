@@ -23,17 +23,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false)
 
   useEffect(() => {
+    let mounted = true
+    
+    // Timeout para evitar que se quede colgado
+    const timeoutId = setTimeout(() => {
+      if (mounted) {
+        setLoading(false)
+      }
+    }, 5000) // 5 segundos timeout
+
     // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      checkAdminStatus(session?.user?.id)
-      setLoading(false)
-    })
+    supabase.auth.getSession()
+      .then(({ data: { session }, error }) => {
+        if (!mounted) return
+        clearTimeout(timeoutId)
+        
+        // Error handling silencioso
+        
+        setSession(session)
+        setUser(session?.user ?? null)
+        checkAdminStatus(session?.user?.id)
+        setLoading(false)
+      })
+      .catch(() => {
+        if (!mounted) return
+        clearTimeout(timeoutId)
+        setLoading(false)
+      })
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
+        if (!mounted) return
+        clearTimeout(timeoutId)
         setSession(session)
         setUser(session?.user ?? null)
         checkAdminStatus(session?.user?.id)
@@ -41,7 +63,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     )
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      clearTimeout(timeoutId)
+      subscription.unsubscribe()
+    }
   }, [])
 
   async function checkAdminStatus(userId?: string) {

@@ -577,6 +577,7 @@ async function processDocumentOrganizer(files: File[], apiKey: string): Promise<
 }
 
 export async function POST(request: NextRequest) {
+  let usageId: string | null = null
   try {
     const formData = await request.formData()
     const skillId = formData.get('skillId') as string
@@ -659,6 +660,24 @@ export async function POST(request: NextRequest) {
         type: 'text',
         text: userInstruction,
       })
+    }
+
+    // Trackear inicio del skill
+    const startTime = Date.now()
+    try {
+      const { trackSkillUsage } = await import('@/lib/supabase')
+      const sessionId = request.headers.get('x-session-id') || undefined
+      
+      const usage = await trackSkillUsage(
+        skillId,
+        file ? file.type : 'text',
+        file ? file.size : undefined,
+        sessionId
+      )
+      usageId = usage.id
+    } catch (trackingError) {
+      console.error('Error tracking skill start:', trackingError)
+      // Continuar aunque falle el tracking
     }
 
     // Llamar a Claude
@@ -1049,9 +1068,54 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Trackear finalización del skill y costos de API
+    if (usageId) {
+      try {
+        const { updateSkillUsage } = await import('@/lib/supabase')
+        const executionTime = Date.now() - startTime
+
+        // Capturar tokens de la respuesta si están disponibles
+        const inputTokens = response.usage?.input_tokens || 0
+        const outputTokens = response.usage?.output_tokens || 0
+        const model = 'claude-sonnet-4-20250514'
+
+        await updateSkillUsage(
+          usageId,
+          'completed',
+          executionTime,
+          undefined,
+          {
+            provider: 'anthropic',
+            model,
+            inputTokens,
+            outputTokens,
+          }
+        )
+      } catch (trackingError) {
+        console.error('Error tracking skill completion:', trackingError)
+        // Continuar aunque falle el tracking
+      }
+    }
+
     return NextResponse.json({ result: resultText })
   } catch (error) {
     console.error('Error ejecutando skill:', error)
+    
+    // Trackear error si es posible
+    if (usageId) {
+      try {
+        const { updateSkillUsage } = await import('@/lib/supabase')
+        await updateSkillUsage(
+          usageId,
+          'failed',
+          undefined,
+          error instanceof Error ? error.message : 'Error desconocido'
+        )
+      } catch (trackingError) {
+        console.error('Error tracking failed skill usage:', trackingError)
+      }
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Error desconocido' },
       { status: 500 }

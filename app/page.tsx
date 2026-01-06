@@ -5,6 +5,7 @@ import DocumentViewer from '../components/DocumentViewer'
 import PDFPreview from '../components/PDFPreview'
 import { useAuth } from '../lib/auth-context'
 import { trackSkillUsage, updateSkillUsage, saveSkillData } from '../lib/supabase'
+import { useAutoTracking } from '../lib/use-tracking'
 
 // Skills disponibles
 const SKILLS: Array<{
@@ -345,6 +346,9 @@ interface SkillResult {
 export default function Home() {
   // Supabase Auth
   const { user, loading: authLoading, signIn, signOut, isAdmin } = useAuth()
+  
+  // Auto-tracking de navegación y eventos
+  useAutoTracking()
   
   // Auth form states
   const [authEmail, setAuthEmail] = useState('')
